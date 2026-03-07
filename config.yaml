@@ -1,0 +1,49 @@
+# --- CORE SETTINGS ---
+keywords:
+  - "Agentic AI"
+  - "RPA"
+  - "n8n"
+
+apify_token: "${APIFY_TOKEN}"
+number_of_posts_to_fetch: 20
+research_depth: shallow   # shallow = 3 sources, deep = 8+ sources
+output_sheet_id: "${GOOGLE_SHEET_ID}"
+language: "de"
+post_style: "thought leadership, concise, data-driven, no fluff"
+
+# --- TIME RANGE FILTER ---
+scrape_time_range:
+  unit: weeks   # options: days | weeks | months
+  value: 2
+
+# --- OPTIONAL FEATURES ---
+
+# Feature 1: Hook generation as separate output field
+generate_hook: true
+
+# Feature 3: Engagement scoring for scraped post ranking
+engagement_scoring:
+  enabled: true
+  likes_weight: 1
+  comments_weight: 3
+  shares_weight: 5
+
+# Feature 4: Personal voice / writing style injection
+voice_samples:
+  enabled: false
+  samples:
+    - "Beispiel-Post 1 Text hier..."
+    - "Beispiel-Post 2 Text hier..."
+    - "Beispiel-Post 3 Text hier..."
+
+# Feature 7: CTA type per post
+cta:
+  enabled: true
+  type: frage_an_community
+  # options: frage_an_community | ressource_teilen | meinung_einfordern | newsletter_link
+
+# Feature 8: Hashtag strategy
+hashtags:
+  enabled: true
+  broad_count: 2
+  niche_count: 3
