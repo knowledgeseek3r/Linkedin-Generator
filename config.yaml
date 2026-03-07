@@ -1,11 +1,12 @@
 # --- CORE SETTINGS ---
 keywords:
   - "Agentic AI"
-  - "RPA"
-  - "n8n"
+  # - "RPA"
+  # - "n8n"
 
 apify_token: "${APIFY_TOKEN}"
 number_of_posts_to_fetch: 20
+posts_per_keyword: 5  # how many LinkedIn posts to generate per keyword
 research_depth: shallow   # shallow = 3 sources, deep = 8+ sources
 output_sheet_id: "${GOOGLE_SHEET_ID}"
 language: "de"
@@ -47,3 +48,8 @@ hashtags:
   enabled: true
   broad_count: 2
   niche_count: 3
+
+# Feature 9: Image generation (DALL-E 3 → imgbb → =IMAGE() in Sheets)
+image_generation:
+  enabled: true
+  # Requires OPENAI_API_KEY and IMGBB_API_KEY in .env

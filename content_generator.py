@@ -5,11 +5,19 @@ import anthropic
 from loguru import logger
 from models import ClassifiedPost, ScoredPost, ResearchSummary, GeneratedPost
 
+VARIATION_ANGLES = [
+    "Focus on a concrete business case or ROI example — use numbers, percentages, or a before/after scenario.",
+    "Take a contrarian or myth-busting angle — challenge a common assumption or hype around this topic.",
+    "Share a practical step-by-step framework or actionable checklist practitioners can apply immediately.",
+    "Highlight a recent trend, prediction, or shift — what is changing and what should professionals watch?",
+    "Explain a complex concept with a clear analogy or comparison — make the abstract tangible for a non-technical audience.",
+]
+
 CTA_INSTRUCTIONS = {
-    "frage_an_community": "End the post with a direct question to the community that invites discussion.",
-    "ressource_teilen": "End the post by recommending a resource or further reading on the topic.",
-    "meinung_einfordern": "End the post by explicitly asking readers to share their opinion or experience.",
-    "newsletter_link": "End the post with a call-to-action to subscribe to a newsletter for more insights.",
+    "frage_an_community": "Write a direct question to the community that invites discussion. Do NOT include this in post_text — put it ONLY in the cta_closing field.",
+    "ressource_teilen": "Recommend a resource or further reading on the topic. Do NOT include this in post_text — put it ONLY in the cta_closing field.",
+    "meinung_einfordern": "Explicitly ask readers to share their opinion or experience. Do NOT include this in post_text — put it ONLY in the cta_closing field.",
+    "newsletter_link": "Write a call-to-action to subscribe to a newsletter for more insights. Do NOT include this in post_text — put it ONLY in the cta_closing field.",
 }
 
 SYSTEM_PROMPT_TEMPLATE = """You are an experienced German-speaking LinkedIn thought leader \
@@ -29,8 +37,13 @@ def _build_user_prompt(
     posts: List[Union[ClassifiedPost, ScoredPost]],
     research: ResearchSummary,
     config: dict,
+    variation_index: int = 0,
 ) -> str:
-    parts = [f'Create a LinkedIn post about the topic: "{keyword}"\n']
+    angle = VARIATION_ANGLES[variation_index % len(VARIATION_ANGLES)]
+    parts = [
+        f'Create a LinkedIn post about the topic: "{keyword}"\n',
+        f'POST ANGLE (mandatory — your post MUST follow this specific angle): {angle}\n',
+    ]
 
     # Voice samples injection
     voice = config.get("voice_samples", {})
@@ -70,8 +83,8 @@ def _build_user_prompt(
     hook_field = ""
     if config.get("generate_hook"):
         hook_field = (
-            '\n  "hook": "Standalone first 210 characters. Must create a curiosity gap or bold statement '
-            'before the See More cutoff. Write it independently — do NOT truncate post_text.",'
+            '\n  "hook": "Standalone opening line, max 210 characters. Must create a curiosity gap or bold statement. '
+            'Do NOT include this in post_text — put it ONLY in the hook field. post_text starts AFTER the hook.",'
         )
 
     cta_field = ""
@@ -82,7 +95,9 @@ def _build_user_prompt(
     if hashtags_cfg.get("enabled"):
         hashtags_field = '\n  "hashtags": ["#Broad1", "#Broad2", "#Niche1", "#Niche2", "#Niche3"],'
 
-    parts.append(f"""Return ONLY valid JSON — no text outside the JSON object:
+    parts.append(f"""Return ONLY valid JSON — no text outside the JSON object.
+CRITICAL JSON RULES: Never use double quotes inside string values. Use dashes (–) or rephrase instead of quoting words.
+
 {{
   "post_title": "catchy German headline, max 10 words",
   "post_text": "full German LinkedIn post, 150-300 words, mobile-optimized formatting",{hook_field}
@@ -94,12 +109,11 @@ def _build_user_prompt(
 
 def _parse_response(text: str, config: dict, keyword: str) -> GeneratedPost:
     text = text.strip()
-    if text.startswith("```"):
-        parts = text.split("```")
-        text = parts[1] if len(parts) > 1 else text
-        if text.startswith("json"):
-            text = text[4:]
-    text = text.strip().rstrip("`").strip()
+    # Extract just the JSON object — handles markdown code blocks, prose wrapping, trailing backticks
+    start = text.find('{')
+    end = text.rfind('}')
+    if start != -1 and end != -1:
+        text = text[start:end + 1]
 
     data = json.loads(text)
     return GeneratedPost(
@@ -118,10 +132,11 @@ def generate(
     posts: List[Union[ClassifiedPost, ScoredPost]],
     research: ResearchSummary,
     config: dict,
+    variation_index: int = 0,
 ) -> GeneratedPost:
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(post_style=config.get("post_style", "concise, data-driven"))
-    user_prompt = _build_user_prompt(keyword, posts, research, config)
+    user_prompt = _build_user_prompt(keyword, posts, research, config, variation_index)
 
     logger.info(f"Generating post for '{keyword}'")
 

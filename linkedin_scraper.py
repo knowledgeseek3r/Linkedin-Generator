@@ -16,7 +16,7 @@ FIELD_MAPS = {
     "comments": ["commentsCount", "comments", "commentCount", "numComments"],
     "shares": ["repostsCount", "shares", "shareCount", "numShares", "repostCount"],
     "date": ["postedAt", "date", "publishedAt", "createdAt", "timestamp"],
-    "url": ["postUrl", "url", "link", "postLink"],
+    "url": ["postUrl", "url", "link", "postLink", "shareUrl", "postLink", "linkedInUrl", "permalinkUrl"],
 }
 
 

@@ -5,7 +5,6 @@ from loguru import logger
 import gspread
 from models import GeneratedPost
 
-POSTING_TIME = "Di–Do 08:00–10:00"
 MAX_RETRIES = 3
 
 
@@ -22,28 +21,31 @@ def _get_client() -> gspread.Client:
 
 
 def _get_headers(config: dict) -> list:
-    headers = ["Thema / Titel", "Beitragstext", "Image Prompt", "Posting-Zeitpunkt"]
-    if config.get("generate_hook"):
-        headers.append("Hook")
-    if config.get("hashtags", {}).get("enabled"):
-        headers.append("Hashtags")
-    return headers
+    image_col = "Beitragsbild" if config.get("image_generation", {}).get("enabled") else "Image Prompt"
+    return ["Thema / Titel", "Beitragstext", image_col]
 
 
 def _build_row(post: GeneratedPost, config: dict) -> list:
-    body = post.post_text
+    # Hook as first paragraph
+    if post.hook:
+        body = f"{post.hook}\n\n{post.post_text}"
+    else:
+        body = post.post_text
+
+    # CTA appended after body
     if post.cta_closing:
         body = f"{body}\n\n{post.cta_closing}"
 
-    row = [post.post_title, body, post.image_prompt, POSTING_TIME]
+    # Hashtags appended at the end
+    if post.hashtags:
+        body = f"{body}\n\n{' '.join(post.hashtags)}"
 
-    if config.get("generate_hook"):
-        row.append(post.hook or "")
-
-    if config.get("hashtags", {}).get("enabled"):
-        row.append(" ".join(post.hashtags) if post.hashtags else "")
-
-    return row
+    # image_prompt holds the Drive URL when image_generation is active, otherwise the raw prompt text
+    if post.image_prompt.startswith("https://"):
+        image_cell = f'=IMAGE("{post.image_prompt}")'
+    else:
+        image_cell = post.image_prompt
+    return [post.post_title, body, image_cell]
 
 
 def _append_with_retry(ws: gspread.Worksheet, row: list) -> None:
