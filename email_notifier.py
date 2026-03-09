@@ -39,21 +39,42 @@ def _build_post_body(post) -> str:
 # HTML email builder
 # ---------------------------------------------------------------------------
 
-def _build_html(post_title: str, post_body: str, image_url: str | None,
+def _build_html(post_title: str, post_body: str, image_urls: list,
                 reply_trigger: str) -> str:
-    """Build HTML email. Image shown at bottom if URL is available."""
+    """Build HTML email. If multiple images, shows selection grid with numbered labels."""
     html_body = post_body.replace("\n", "<br>")
-    image_html = ""
-    if image_url:
+
+    if len(image_urls) > 1:
+        cells = "".join(
+            f'<td align="center" style="padding:8px;">'
+            f'<img src="{url}" alt="Bild {i+1}" width="180" style="border-radius:6px;display:block;">'
+            f'<p style="margin:6px 0 0 0;font-size:18px;font-weight:bold;color:#0077b5;">{i+1}</p>'
+            f'</td>'
+            for i, url in enumerate(image_urls)
+        )
         image_html = (
             f'<div style="margin-top:24px;">'
-            f'<img src="{image_url}" alt="Beitragsbild" '
+            f'<p style="font-size:14px;color:#444;margin:0 0 12px 0;">'
+            f'<strong>Wähle ein Bild:</strong></p>'
+            f'<table><tr>{cells}</tr></table>'
+            f'</div>'
+        )
+        cta_text = f'Antworte mit <strong style="color:#0077b5;">1</strong>, <strong style="color:#0077b5;">2</strong> oder <strong style="color:#0077b5;">3</strong> um das gewählte Bild auf LinkedIn zu veröffentlichen.'
+    elif image_urls:
+        image_html = (
+            f'<div style="margin-top:24px;">'
+            f'<img src="{image_urls[0]}" alt="Beitragsbild" '
             f'style="max-width:600px;width:100%;border-radius:6px;">'
             f'</div>'
         )
+        cta_text = f'Antworte mit <strong style="color:#0077b5;">{reply_trigger}</strong> auf diese E-Mail, um diesen Beitrag automatisch auf LinkedIn zu veröffentlichen.'
+    else:
+        image_html = ""
+        cta_text = f'Antworte mit <strong style="color:#0077b5;">{reply_trigger}</strong> auf diese E-Mail, um diesen Beitrag automatisch auf LinkedIn zu veröffentlichen.'
+
     return f"""<!DOCTYPE html>
 <html>
-<body style="font-family:Arial,sans-serif;max-width:640px;margin:auto;padding:24px;color:#1a1a1a;">
+<body style="font-family:Arial,sans-serif;max-width:700px;margin:auto;padding:24px;color:#1a1a1a;">
   <div style="border-left:4px solid #0077b5;padding-left:16px;margin-bottom:20px;">
     <h2 style="color:#0077b5;margin:0 0 4px 0;">LinkedIn Beitrag</h2>
     <p style="margin:0;color:#666;font-size:14px;">{post_title}</p>
@@ -64,10 +85,7 @@ def _build_html(post_title: str, post_body: str, image_url: str | None,
   </div>
   {image_html}
   <hr style="margin:28px 0;border:none;border-top:1px solid #e0e0e0;">
-  <p style="color:#888;font-size:13px;margin:0;">
-    Antworte mit <strong style="color:#0077b5;">{reply_trigger}</strong> auf diese E-Mail,
-    um diesen Beitrag automatisch auf LinkedIn zu veröffentlichen.
-  </p>
+  <p style="color:#888;font-size:13px;margin:0;">{cta_text}</p>
 </body>
 </html>"""
 
@@ -93,14 +111,12 @@ def _save_pending(data: dict) -> None:
 # Public API
 # ---------------------------------------------------------------------------
 
-def send(post, config: dict) -> str:
+def send(post, config: dict, image_urls: list = None) -> str:
     """
     Send an HTML email for the given GeneratedPost.
+    image_urls: list of image URLs (3 for selection, 1 for single, or [] for none).
     Stores post data in .tmp/pending_posts.json keyed by Message-ID.
     Returns the Message-ID string.
-
-    Raises smtplib.SMTPAuthenticationError if credentials are wrong.
-    Raises smtplib.SMTPException on other send failures.
     """
     email_cfg = config["email_notification"]
     smtp_host = email_cfg["smtp_host"]
@@ -112,8 +128,10 @@ def send(post, config: dict) -> str:
 
     post_body = _build_post_body(post)
 
-    # Use image URL only if image generation was active (URL starts with https://)
-    image_url = post.image_prompt if post.image_prompt.startswith("https://") else None
+    # Resolve image URLs: prefer passed image_urls, fallback to post.image_prompt if it's a URL
+    if not image_urls:
+        primary = post.image_prompt if post.image_prompt and post.image_prompt.startswith("https://") else None
+        image_urls = [primary] if primary else []
 
     # Build message
     msg = MIMEMultipart("alternative")
@@ -126,7 +144,7 @@ def send(post, config: dict) -> str:
     message_id = make_msgid(domain=domain)
     msg["Message-ID"] = message_id
 
-    html_content = _build_html(post.post_title, post_body, image_url, reply_trigger)
+    html_content = _build_html(post.post_title, post_body, image_urls, reply_trigger)
     msg.attach(MIMEText(html_content, "html", "utf-8"))
 
     logger.info(f"Sending email: '{post.post_title}' → {recipient}")
@@ -153,11 +171,12 @@ def send(post, config: dict) -> str:
     pending[message_id] = {
         "post_title": post.post_title,
         "post_body": post_body,
-        "image_url": image_url,
+        "image_url": image_urls[0] if image_urls else None,   # primary (for Sheets/backward compat)
+        "image_urls": image_urls,                              # all options for reply selection
         "sent_at": datetime.now(timezone.utc).isoformat(),
         "keyword": post.keyword,
     }
     _save_pending(pending)
-    logger.debug(f"Saved to pending_posts.json: {message_id}")
+    logger.debug(f"Saved to pending_posts.json: {message_id} ({len(image_urls)} image(s))")
 
     return message_id

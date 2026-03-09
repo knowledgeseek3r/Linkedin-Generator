@@ -157,19 +157,20 @@ def run_pipeline(config: dict) -> None:
                 if config.get("post_optimization", {}).get("enabled"):
                     post = content_generator.optimize_post(post, config)
 
-                # Step 6c: Image generation (optional)
+                # Step 6c: Image generation — 3 images for selection (optional)
+                image_urls = []
                 if config.get("image_generation", {}).get("enabled"):
-                    image_url = image_generator.generate_and_upload(post.image_prompt, keyword)
-                    post = post.model_copy(update={"image_prompt": image_url})
+                    image_urls = image_generator.generate_multiple(post.image_prompt, keyword, config, n=3)
+                    post = post.model_copy(update={"image_prompt": image_urls[0]})
 
-                # Step 7: Write to Google Sheets
+                # Step 7: Write to Google Sheets (uses first image = post.image_prompt)
                 sheets_client.write(post, config)
 
                 # Step 7b: Email notification (optional)
                 if config.get("email_notification", {}).get("enabled"):
                     try:
                         import email_notifier
-                        email_notifier.send(post, config)
+                        email_notifier.send(post, config, image_urls=image_urls)
                     except Exception as e:
                         logger.error(f"Email notification failed for '{post.post_title}': {e}")
                         # Non-fatal — Sheets write already succeeded, pipeline continues

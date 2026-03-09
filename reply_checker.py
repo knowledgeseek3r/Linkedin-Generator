@@ -176,13 +176,25 @@ def check_replies(config: dict) -> int:
             subject = _decode_header_value(msg.get("Subject", ""))
             logger.info(f"Reply found for '{post_data['post_title']}' (subject: {subject!r})")
 
-            # Check trigger word — only first non-empty line to avoid quoted text matches
+            # Check first non-empty line — accepts "1"/"2"/"3" (image selection) or trigger word
             body = _get_plain_body(msg)
-            first_line = _first_non_empty_line(body).lower()
+            first_line = _first_non_empty_line(body).strip()
+            first_line_lower = first_line.lower()
 
-            if reply_trigger not in first_line:
+            available_images = post_data.get("image_urls", [])
+            selected_image = post_data.get("image_url")  # default = first image
+
+            if available_images and first_line in ("1", "2", "3"):
+                idx = int(first_line) - 1
+                if idx < len(available_images):
+                    selected_image = available_images[idx]
+                    logger.info(f"Image {first_line} selected: {selected_image}")
+                else:
+                    selected_image = available_images[0]
+                    logger.warning(f"Image index {first_line} out of range — using image 1")
+            elif reply_trigger.lower() not in first_line_lower:
                 logger.info(
-                    f"Trigger word '{reply_trigger}' not found in first line: {first_line[:60]!r} — skipping"
+                    f"No valid selection in first line: {first_line[:60]!r} — skipping"
                 )
                 mail.store(eid, "+FLAGS", "\\Seen")
                 continue
@@ -192,7 +204,7 @@ def check_replies(config: dict) -> int:
             try:
                 linkedin_poster.post_to_linkedin(
                     post_body=post_data["post_body"],
-                    image_url=post_data.get("image_url"),
+                    image_url=selected_image,
                     config=config,
                 )
                 # Success — remove from pending, mark email as read

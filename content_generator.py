@@ -14,7 +14,21 @@ VARIATION_ANGLES = [
 ]
 
 CTA_INSTRUCTIONS = {
-    "frage_an_community": "Write a direct question to the community that invites discussion. Do NOT include this in post_text — put it ONLY in the cta_closing field.",
+    "frage_an_community": (
+        "Write a direct question to the community that invites discussion. "
+        "Do NOT include this in post_text — put it ONLY in the cta_closing field.\n"
+        "FORBIDDEN words in the CTA: Pilot, pilotieren, skaliert, Skalierung, Prozessintegration, isoliert.\n"
+        "The question must be genuinely formulated for this specific post — not a generic template with filled-in placeholders. "
+        "It should feel like it was written by someone who just read the post and is curious about this exact topic.\n"
+        "Vary the style each time. These are examples of the TYPE of question to ask — not templates to copy:\n"
+        "- Challenge a common assumption specific to this post's claim\n"
+        "- Ask about a concrete decision or turning point in the reader's organization\n"
+        "- Ask what surprised readers most about a specific finding in the post\n"
+        "- Ask about a real obstacle readers face in this exact context\n"
+        "- Ask how different roles (e.g. IT vs. management) experience this differently\n"
+        "- Ask what readers would do differently knowing what the post revealed\n"
+        "The question must reference the concrete topic of THIS post, not the topic in general."
+    ),
     "ressource_teilen": "Recommend a resource or further reading on the topic. Do NOT include this in post_text — put it ONLY in the cta_closing field.",
     "meinung_einfordern": "Explicitly ask readers to share their opinion or experience. Do NOT include this in post_text — put it ONLY in the cta_closing field.",
     "newsletter_link": "Write a call-to-action to subscribe to a newsletter for more insights. Do NOT include this in post_text — put it ONLY in the cta_closing field.",
@@ -41,6 +55,8 @@ OPTIMIZE_PROMPT = """Du bist ein LinkedIn Content Experte. Optimiere den folgend
 4. **Ton** – Menschlich, authentisch, keine Marketing-Sprache
 5. **CTA** – Frage am Ende die Kommentare provoziert
 6. **Algorithmus** – Keine externen Links, 3-5 relevante Hashtags, ~1300 Zeichen
+7. **Quellen** – Alle Quellenangaben in Klammern (z.B. "(Deloitte, 2025)") MÜSSEN erhalten bleiben. Niemals eine Quellenangabe entfernen oder verändern.
+8. **Kein "Ich"** – Nie erste Person verwenden. Kein "ich", "meine", "bei mir".
 
 Wichtig: Behalte den Titel als allerersten Satz bei, gefolgt von einem Leerzeichen (Absatz).
 
@@ -73,8 +89,9 @@ def _build_user_prompt(
     if content_rules.get("verified_case_studies_only"):
         parts.append("""RULE — Fallstudien & Quellen:
 Erwähne NUR dann eine konkrete Fallstudie oder Studie wenn sie von einem bekannten Analyst-Haus stammt (Gartner, Deloitte, McKinsey, Forrester, IDC).
-Wenn der Input-Text eine Fallstudie eines unbekannten/privaten Unternehmens enthält: Erwähne KEINE spezifische Fallstudie. Verallgemeinere stattdessen: "In der Praxis sehe ich oft...", "Viele Unternehmen kämpfen mit...", "Ein typisches Beispiel..."
+Wenn der Input-Text eine Fallstudie eines unbekannten/privaten Unternehmens enthält: Erwähne KEINE spezifische Fallstudie. Verallgemeinere stattdessen: "In der Praxis zeigt sich:", "Viele Unternehmen kämpfen mit...", "Typischerweise gilt:"
 NIEMALS eine Fallstudie erfinden oder implizieren die nicht öffentlich bekannt ist.
+VERBOTEN: Die Phrase "Ein Beispiel aus der Praxis:" darf NUR verwendet werden wenn DIREKT danach ein konkreter, namentlich genannter Unternehmensname UND eine Quellenangabe folgen (z.B. "Ein Beispiel aus der Praxis: Siemens reduzierte... (Forrester, 2024)"). Ohne beides: verwende "In der Praxis zeigt sich:" oder "Typischerweise gilt:" stattdessen.
 """)
 
     if content_rules.get("cite_statistics"):
@@ -132,7 +149,7 @@ CRITICAL JSON RULES: Never use double quotes inside string values. Use dashes (�
 {{
   "post_title": "catchy German headline, max 10 words",
   "post_text": "full German LinkedIn post, 150-300 words, mobile-optimized formatting",{hook_field}
-  "image_prompt": "detailed English image generation prompt in DALL-E/Midjourney style, describing a visual that matches the post theme",{cta_field}{hashtags_field}
+  "image_prompt": "Ideogram V3 image prompt. Create ONE powerful visual metaphor that represents the single core insight of this post.\n\nVISUAL RULES:\n- Single focal point only — no collage, no split scenes\n- Cinematic or minimalist professional style\n- Photorealistic or clean digital art\n- Deep, purposeful color palette (no random bright colors)\n\nTEXT RULES (critical):\n- Maximum 1 word total — only if absolutely essential to the concept\n- The word must be: short (max 10 chars), common English, correctly spelled\n- Forbidden: repeating any word from the post title or subject\n- Forbidden: abstract compound words, technical jargon, invented terms\n- If unsure about spelling → use NO text at all\n- Default choice: NO TEXT — let the visual speak alone\n\nCOMPOSITION:\n- The image must tell ONE story at a glance\n- A viewer who has not read the post should understand the mood/theme\n- Avoid: random floating icons, word clouds, concept collages\n\nExample output: A lone robot arm precisely placing the final piece of a glowing circuit board, dark studio lighting, shallow depth of field, photorealistic, no text",{cta_field}{hashtags_field}
 }}""")
 
     return "\n".join(parts)

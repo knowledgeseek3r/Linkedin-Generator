@@ -1,9 +1,9 @@
 # --- CORE SETTINGS ---
 keywords:
-  - "Agentic AI"
+  #- "Agentic AI"
   # - "Sovereign AI"
   # - "n8n"
-  # "Intelligent Automation"
+  - "Intelligent Automation"
   # "Claude Code"
   # "Antigravity" 
   # "Codex"
@@ -63,10 +63,12 @@ content_rules:
 post_optimization:
   enabled: true
 
-# Feature 9: Image generation (DALL-E 3 → imgbb → =IMAGE() in Sheets)
+# Feature 9: Image generation (provider → imgbb → =IMAGE() in Sheets)
+# provider options: ideogram (V3, recommended) | dalle3 (DALL-E 3)
 image_generation:
   enabled: true
-  # Requires OPENAI_API_KEY and IMGBB_API_KEY in .env
+  provider: ideogram   # Requires IDEOGRAM_API_KEY in .env
+  # provider: dalle3   # Requires OPENAI_API_KEY in .env
 
 # Feature 10: Email notification after each post is written to Sheets
 # Each email contains the full post text + image.
