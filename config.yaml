@@ -57,3 +57,23 @@ hashtags:
 image_generation:
   enabled: true
   # Requires OPENAI_API_KEY and IMGBB_API_KEY in .env
+
+# Feature 10: Email notification after each post is written to Sheets
+# Each email contains the full post text + image.
+# Reply with the trigger word to approve publishing to LinkedIn.
+email_notification:
+  enabled: true
+  smtp_host: "smtp.gmail.com"
+  smtp_port: 587
+  sender_email: "${EMAIL_USER}"
+  sender_password: "${EMAIL_PASSWORD}"   # Gmail App Password (not your account password)
+  recipient_email: "${EMAIL_RECIPIENT}"
+  reply_trigger: "Post"   # reply with exactly this word to publish to LinkedIn
+
+# Feature 11: LinkedIn auto-posting triggered by email reply
+# Run: python reply_checker.py --once  (after replying to the email)
+#   or: python reply_checker.py        (polling loop, checks every 60s)
+linkedin_posting:
+  enabled: true
+  access_token: "${LINKEDIN_ACCESS_TOKEN}"
+  person_urn: "${LINKEDIN_PERSON_URN}"   # format: urn:li:person:XXXXXXXX

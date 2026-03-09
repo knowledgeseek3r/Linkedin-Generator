@@ -144,6 +144,15 @@ def run_pipeline(config: dict) -> None:
                 # Step 7: Write to Google Sheets
                 sheets_client.write(post, config)
 
+                # Step 7b: Email notification (optional)
+                if config.get("email_notification", {}).get("enabled"):
+                    try:
+                        import email_notifier
+                        email_notifier.send(post, config)
+                    except Exception as e:
+                        logger.error(f"Email notification failed for '{post.post_title}': {e}")
+                        # Non-fatal — Sheets write already succeeded, pipeline continues
+
             # Persist used post URLs so they are excluded in future runs
             _save_used_urls(keyword, {_post_uid(p) for p in posts_for_gen})
             logger.info(f"Saved {len(posts_for_gen)} used post URLs for '{keyword}'")
