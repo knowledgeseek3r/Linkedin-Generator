@@ -1,8 +1,12 @@
 # --- CORE SETTINGS ---
 keywords:
   - "Agentic AI"
-  # - "RPA"
+  # - "Sovereign AI"
   # - "n8n"
+  # "Intelligent Automation"
+  # "Claude Code"
+  # "Antigravity" 
+  # "Codex"
 
 apify_token: "${APIFY_TOKEN}"
 number_of_posts_to_fetch: 20
