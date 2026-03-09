@@ -10,7 +10,7 @@ keywords:
 
 apify_token: "${APIFY_TOKEN}"
 number_of_posts_to_fetch: 20
-posts_per_keyword: 5  # how many LinkedIn posts to generate per keyword
+posts_per_keyword: 1  # how many LinkedIn posts to generate per keyword
 research_depth: shallow   # shallow = 3 sources, deep = 8+ sources
 output_sheet_id: "${GOOGLE_SHEET_ID}"
 language: "de"
@@ -52,6 +52,16 @@ hashtags:
   enabled: true
   broad_count: 2
   niche_count: 3
+
+# Feature: Content quality rules (injected into generation prompt)
+content_rules:
+  verified_case_studies_only: true  # Only cite case studies from Gartner, Deloitte, McKinsey, Forrester, IDC
+  cite_statistics: true             # All statistics must include source inline e.g. (Deloitte, 2025)
+
+# Feature: LinkedIn post optimizer — runs after generation, before image gen
+# Assembles full post (title + hook + body + CTA + hashtags), optimizes for LinkedIn algorithm
+post_optimization:
+  enabled: true
 
 # Feature 9: Image generation (DALL-E 3 → imgbb → =IMAGE() in Sheets)
 image_generation:

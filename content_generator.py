@@ -29,7 +29,22 @@ Rules:
 - Write exclusively in German
 - Format for mobile: short paragraphs (2-3 sentences max), strategic line breaks, no walls of text
 - Be data-driven, specific, and avoid generic statements
-- Sound like a knowledgeable practitioner, not a content marketer"""
+- Sound like a knowledgeable practitioner, not a content marketer
+- NEVER write in first person. Do NOT use "ich sehe", "ich begleite", "in meiner Erfahrung", "ich empfehle", "bei meinen Kunden", "ich arbeite mit", or any similar personal coaching language.
+- Write as an industry analyst or in knowledge-article style — factual, use neutral framing ("Unternehmen", "Führungskräfte", "man sieht", "die Praxis zeigt")."""
+
+OPTIMIZE_PROMPT = """Du bist ein LinkedIn Content Experte. Optimiere den folgenden Post basierend auf diesen Kriterien:
+
+1. **Hook** – Erste Zeile muss zum Weiterlesen zwingen (Zahl, These, oder Story-Einstieg)
+2. **Struktur** – Kurze Absätze, Weißraum, Aufbau: Hook → Kontext → Mehrwert → CTA
+3. **Mehrwert** – Konkretes Takeaway das der Leser mitnehmen kann
+4. **Ton** – Menschlich, authentisch, keine Marketing-Sprache
+5. **CTA** – Frage am Ende die Kommentare provoziert
+6. **Algorithmus** – Keine externen Links, 3-5 relevante Hashtags, ~1300 Zeichen
+
+Wichtig: Behalte den Titel als allerersten Satz bei, gefolgt von einem Leerzeichen (Absatz).
+
+Gib NUR den optimierten Post zurück."""
 
 
 def _build_user_prompt(
@@ -52,6 +67,22 @@ def _build_user_prompt(
         for i, sample in enumerate(voice["samples"], 1):
             parts.append(f"Style Example {i}:\n{sample}")
         parts.append("")
+
+    # Content quality rules (optional, from config)
+    content_rules = config.get("content_rules", {})
+    if content_rules.get("verified_case_studies_only"):
+        parts.append("""RULE — Fallstudien & Quellen:
+Erwähne NUR dann eine konkrete Fallstudie oder Studie wenn sie von einem bekannten Analyst-Haus stammt (Gartner, Deloitte, McKinsey, Forrester, IDC).
+Wenn der Input-Text eine Fallstudie eines unbekannten/privaten Unternehmens enthält: Erwähne KEINE spezifische Fallstudie. Verallgemeinere stattdessen: "In der Praxis sehe ich oft...", "Viele Unternehmen kämpfen mit...", "Ein typisches Beispiel..."
+NIEMALS eine Fallstudie erfinden oder implizieren die nicht öffentlich bekannt ist.
+""")
+
+    if content_rules.get("cite_statistics"):
+        parts.append("""RULE — Statistiken & Zahlen:
+Wenn du eine Statistik, Prozentzahl oder Zahlenklaim im Post verwendest, MUSST du die Quelle direkt danach in Klammern angeben.
+Beispiel: "Nur 11 % der Unternehmen nutzen Agentic AI aktiv im Produktivbetrieb. (Deloitte Emerging Technology Trends, 2025)"
+Verwende NUR Statistiken mit bekannter, verifizierbarer Quelle. Erfinde KEINE Statistiken.
+""")
 
     # Inspiration posts
     top_posts = posts[:5]
@@ -160,3 +191,36 @@ def generate(
                 user_prompt = user_prompt + "\n\nIMPORTANT: Your previous response was not valid JSON. Return ONLY the raw JSON object, nothing else."
                 continue
             raise RuntimeError(f"Content generation failed for '{keyword}' after retry: {e}") from e
+
+
+def optimize_post(post: GeneratedPost, config: dict) -> GeneratedPost:
+    """Assemble full post text (title first), run LinkedIn optimization, return updated post."""
+    # Assemble full text: title → hook → body → CTA → hashtags
+    parts = [post.post_title]
+    if post.hook:
+        parts.append(post.hook)
+    parts.append(post.post_text)
+    if post.cta_closing:
+        parts.append(post.cta_closing)
+    if post.hashtags:
+        parts.append(" ".join(post.hashtags))
+    assembled = "\n\n".join(parts)
+
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    logger.info(f"Optimizing post: '{post.post_title}'")
+
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=2000,
+        messages=[{"role": "user", "content": f"{OPTIMIZE_PROMPT}\n\n---\n{assembled}"}],
+    )
+    optimized = response.content[0].text.strip()
+    logger.success(f"Post optimized ({len(optimized)} chars): '{post.post_title}'")
+
+    # Return updated post: hook/cta/hashtags are now merged into post_text by the optimizer
+    return post.model_copy(update={
+        "post_text": optimized,
+        "hook": None,
+        "cta_closing": None,
+        "hashtags": None,
+    })

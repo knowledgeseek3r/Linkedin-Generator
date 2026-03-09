@@ -41,10 +41,16 @@ def _upload_to_imgbb(image_bytes: bytes) -> str:
     return url
 
 
+_NO_TEXT_SUFFIX = (
+    " The image must contain absolutely no text, letters, words, numbers, labels, "
+    "captions, signs, watermarks, or typography of any kind."
+)
+
+
 def generate_and_upload(prompt: str, keyword: str) -> str:
     """Generate image with DALL-E 3, upload to imgbb, return permanent URL."""
     logger.info(f"Generating image for '{keyword}'")
-    image_bytes = _dalle_generate(prompt)
+    image_bytes = _dalle_generate(prompt + _NO_TEXT_SUFFIX)
     url = _upload_to_imgbb(image_bytes)
     logger.success(f"Image ready: {url}")
     return url

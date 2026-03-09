@@ -54,6 +54,21 @@ def _load_used_urls(keyword: str) -> set:
     return set()
 
 
+def _load_last_angle(keyword: str) -> int:
+    path = f".tmp/last_angle_{keyword.replace(' ', '_').replace('/', '_')}.json"
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f).get("last_angle", -1)
+    return -1  # -1 → first run starts at index 0
+
+
+def _save_last_angle(keyword: str, angle: int) -> None:
+    os.makedirs(".tmp", exist_ok=True)
+    path = f".tmp/last_angle_{keyword.replace(' ', '_').replace('/', '_')}.json"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"last_angle": angle}, f)
+
+
 def _save_used_urls(keyword: str, new_urls: set) -> None:
     path = _used_urls_path(keyword)
     existing = _load_used_urls(keyword)
@@ -130,13 +145,19 @@ def run_pipeline(config: dict) -> None:
             research = researcher.research(keyword, config.get("research_depth", "shallow"))
 
             # Steps 6+7: Generate and write N posts per keyword
+            last_angle = _load_last_angle(keyword)
             for post_idx in range(posts_per_keyword):
-                logger.info(f"Generating post {post_idx + 1}/{posts_per_keyword} for '{keyword}'")
+                variation_index = (last_angle + 1 + post_idx) % 5
+                logger.info(f"Generating post {post_idx + 1}/{posts_per_keyword} for '{keyword}' (angle {variation_index})")
 
                 # Step 6: Content generation
-                post = content_generator.generate(keyword, posts_for_gen, research, config, variation_index=post_idx)
+                post = content_generator.generate(keyword, posts_for_gen, research, config, variation_index=variation_index)
 
-                # Step 6b: Image generation (optional)
+                # Step 6b: Post optimization (optional) — runs BEFORE image generation
+                if config.get("post_optimization", {}).get("enabled"):
+                    post = content_generator.optimize_post(post, config)
+
+                # Step 6c: Image generation (optional)
                 if config.get("image_generation", {}).get("enabled"):
                     image_url = image_generator.generate_and_upload(post.image_prompt, keyword)
                     post = post.model_copy(update={"image_prompt": image_url})
@@ -152,6 +173,9 @@ def run_pipeline(config: dict) -> None:
                     except Exception as e:
                         logger.error(f"Email notification failed for '{post.post_title}': {e}")
                         # Non-fatal — Sheets write already succeeded, pipeline continues
+
+            # Persist last used angle so next run rotates to a different angle
+            _save_last_angle(keyword, (last_angle + posts_per_keyword) % 5)
 
             # Persist used post URLs so they are excluded in future runs
             _save_used_urls(keyword, {_post_uid(p) for p in posts_for_gen})

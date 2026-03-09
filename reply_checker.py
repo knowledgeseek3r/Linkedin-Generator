@@ -19,6 +19,7 @@ import json
 import time
 import imaplib
 import email
+from datetime import datetime, timedelta
 from email.header import decode_header
 
 from loguru import logger
@@ -136,13 +137,14 @@ def check_replies(config: dict) -> int:
 
     try:
         mail.select("INBOX")
-        status, data = mail.search(None, "UNSEEN")
+        since_date = (datetime.now() - timedelta(days=10)).strftime("%d-%b-%Y")
+        status, data = mail.search(None, f'(UNSEEN SINCE "{since_date}")')
         if status != "OK":
             logger.warning("IMAP SEARCH returned non-OK status")
             return 0
 
         email_ids = data[0].split()
-        logger.info(f"Found {len(email_ids)} unread email(s) to check")
+        logger.info(f"Found {len(email_ids)} unread email(s) in the last 10 days to check")
 
         pending_ids = set(pending.keys())
 

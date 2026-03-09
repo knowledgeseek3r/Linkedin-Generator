@@ -1,7 +1,7 @@
 # Project Context — LinkedIn Content Intelligence & Generation Pipeline
 
-> Last updated: 2026-03-07
-> Status: **Fully working — multiple test runs confirmed end-to-end success**
+> Last updated: 2026-03-09
+> Status: **6 content quality + optimization features added — end-to-end test pending**
 
 ---
 
@@ -16,14 +16,19 @@ A fully automated WAT-framework Python pipeline that:
 6. Runs web research per keyword via Claude API with `web_search` tool (90s hard timeout)
 7. Generates German LinkedIn posts (150–300 words, mobile-optimized) with Hook, CTA, Hashtags
    — Each post gets a distinct content angle (5 rotating angles, no personal storytelling)
-8. Generates a DALL-E 3 image, uploads to imgbb, writes `=IMAGE()` formula to Google Sheets
-9. Writes 3-column output to Google Sheets: Thema/Titel | Beitragstext | Beitragsbild
-10. Generates N posts per keyword (configurable via `posts_per_keyword`)
+   — Content rules: only verified analyst-house case studies, all stats must cite source inline
+8. **NEW: Post-optimizer** — second Claude call after generation, before image gen, optimizes for LinkedIn algorithm (hook, structure, CTA, ~1300 chars). Title prepended as first line.
+9. Generates a DALL-E 3 image (no text in image enforced via prompt suffix), uploads to imgbb, writes `=IMAGE()` formula to Google Sheets
+10. Writes 3-column output to Google Sheets: Thema/Titel | Beitragstext | Beitragsbild
+11. Generates N posts per keyword (configurable via `posts_per_keyword`)
+12. Sends each post via HTML email (text + image) to recipient for review
+13. Reply-triggered LinkedIn posting — reply with trigger word → `reply_checker.py` → posts to LinkedIn API v2
 
-**Confirmed working:**
-- "Agentic AI" → 5 posts with distinct titles and angles generated and written to Sheets
-- Post deduplication via text-hash UID working across runs
-- Variation angles produce meaningfully different posts per run
+**Confirmed working (2026-03-09):**
+- Full pipeline run: "Agentic AI" → 1 post → Sheets → email sent ✅
+- Email delivered to raphael.swidnicki@googlemail.com ✅
+- LinkedIn API credentials fully configured ✅
+- `reply_checker.py --once` ready to test (not yet end-to-end tested with new features)
 
 ---
 
@@ -32,27 +37,33 @@ A fully automated WAT-framework Python pipeline that:
 | Decision | Choice | Reason |
 |---|---|---|
 | Framework | WAT (Workflows, Agents, Tools) | Separates probabilistic AI from deterministic execution |
-| Apify actor | `harvestapi/linkedin-post-search` | Most reliable option; `apify/linkedin-post-search-scraper` does NOT exist |
-| Apify input params | `searchQueries: [keyword]`, `maxPosts: n` | Actor ignores `searchQuery`/`maxResults` — confirmed by testing |
-| Date filtering | Post-scrape only (in `time_filter.py`) | No reliable native date filter in Apify actors |
+| Apify actor | `harvestapi/linkedin-post-search` | Most reliable option |
+| Apify input params | `searchQueries: [keyword]`, `maxPosts: n` | Actor ignores `searchQuery`/`maxResults` |
+| Date filtering | Post-scrape only (in `time_filter.py`) | No reliable native date filter in Apify |
 | Apify fallback | `curious_coder/linkedin-post-search-scraper` | Auto-tried if primary actor fails |
-| Claude model | `claude-sonnet-4-6` | Confirmed correct model string as of 2026-03-07 |
+| Claude model | `claude-sonnet-4-6` | Confirmed correct model string |
 | Web search tool | `web_search_20260209` | Latest version, no beta header required |
-| Research timeout | 90s via `ThreadPoolExecutor.result(timeout=90)` + `shutdown(wait=False)` | `timeout=` on Anthropic client only applies per HTTP request, not full tool-use loop. ThreadPoolExecutor with `wait=False` is the only way to truly abort on Windows |
-| Image generation | DALL-E 3 → imgbb | Google Drive rejected service account uploads (no storage quota). imgbb is free, permanent URLs, simple API |
+| Research timeout | 90s via `ThreadPoolExecutor.result(timeout=90)` + `shutdown(wait=False)` | Only way to truly abort on Windows |
+| Image generation | DALL-E 3 → imgbb | Google Drive rejected service account uploads |
 | Image in Sheets | `=IMAGE("url")` formula | Embeds image directly in Sheets cell |
-| Classifier strategy | Single batch call per keyword | All posts classified in one prompt — cost efficient |
-| gspread auth | `service_account_from_dict()` from `credentials.json` | File-based credentials per CLAUDE.md convention |
-| Sheets columns | Fixed 3 columns: Titel, Beitragstext, Beitragsbild | Posting-Zeitpunkt column removed (not needed) |
-| Hook/CTA/Hashtags | All merged into Beitragstext (column B) | Hook prepended, CTA + Hashtags appended — no separate columns |
-| Optional features | Controlled exclusively via `config.yaml` flags | Zero code branches run if flag is false/absent |
+| Classifier strategy | Single batch call per keyword | Cost efficient |
+| gspread auth | `service_account_from_dict()` from `credentials.json` | File-based credentials |
+| Sheets columns | Fixed 3 columns: Titel, Beitragstext, Beitragsbild | Posting-Zeitpunkt removed |
+| Hook/CTA/Hashtags | All merged into Beitragstext (column B) | No separate columns |
+| Content rules | `content_rules` flags in config.yaml, injected into generation prompt | Configurable per run, no code branches |
+| Post optimizer | Second Claude call (`optimize_post()`), assembles full text then optimizes | Separate step = clean separation of generation vs. polish |
+| Title in post text | Prepended before optimizer call | LinkedIn post body should be self-contained |
+| No text in images | `_NO_TEXT_SUFFIX` appended to every DALL-E prompt in `image_generator.py` | DALL-E tends to add text unless explicitly blocked |
+| Optional features | Controlled exclusively via `config.yaml` flags | Zero code branches if disabled |
 | Logging | `loguru` | Dual output: stderr (INFO) + `.tmp/pipeline_DATE.log` (DEBUG) |
-| File naming | `linkedin_scraper.py` (not `apify_client.py`) | `apify_client.py` conflicts with the `apify-client` package name |
-| Post deduplication | Text-hash UID (MD5 of first 300 chars) stored in `.tmp/used_posts_{keyword}.json` | harvestapi returns no URL field — URL-based dedup impossible; text-hash is robust fallback |
-| Variation angles | 5 predefined content angles, rotated by `post_idx` | Prevents identical posts across N generations per keyword |
-| No personal storytelling | Storytelling angle removed from `VARIATION_ANGLES` | Posts implying personal experience would be fabricated — replaced with analogy/comparison angle |
-| JSON extraction | `text.find('{')` / `text.rfind('}')` | More robust than splitting on ``` — handles any wrapping the model adds |
-| JSON prompt rule | "Never use double quotes inside string values" | Prevents unescaped quote errors in German text |
+| Post deduplication | Text-hash UID (MD5 of first 300 chars) in `.tmp/used_posts_{keyword}.json` | harvestapi returns no URL field |
+| Variation angles | 5 predefined angles, rotated by `post_idx` | Prevents identical posts |
+| Email sending | SMTP (smtplib) + Gmail App Password | Stdlib, no new dependencies |
+| Email reply monitoring | IMAP (imaplib) polling via `reply_checker.py` | Stdlib, simple |
+| Pending posts store | `.tmp/pending_posts.json` keyed by Message-ID | Links email reply to post data |
+| LinkedIn posting | API v2 `/v2/ugcPosts` + 3-step image upload | Official API with `w_member_social` scope |
+| LinkedIn Person URN | `urn:li:person:C40HzWTIZk` | Fetched via `/v2/userinfo` with openid+profile token |
+| Person ID discovery | `/v2/userinfo` endpoint requires `openid`+`profile` scopes | `w_member_social` alone is read-only blind |
 
 ---
 
@@ -60,27 +71,31 @@ A fully automated WAT-framework Python pipeline that:
 
 ```
 LinkedIn Content Generator/
-├── main.py                  # Orchestrator — pipeline per keyword, dedup, retry logic, error isolation
-├── config.yaml              # All settings + optional feature flags (the only file you need to edit)
-├── config_loader.py         # Loads YAML, resolves ${ENV_VAR} references, computes date_from at startup
+├── main.py                  # Orchestrator — pipeline per keyword, dedup, retry, email notification
+├── config.yaml              # All settings + optional feature flags
+├── config_loader.py         # Loads YAML, resolves ${ENV_VAR}, validates all sections incl. email+linkedin
 ├── models.py                # Pydantic models for all data types
-├── linkedin_scraper.py      # Apify scraping — primary + fallback actor, flexible field mapping, date parsing
-├── time_filter.py           # Filters posts by date_from, exports InsufficientPostsError
-├── classifier.py            # Batch Claude classifier — one API call per keyword, retry + skip logic
-├── researcher.py            # Claude with web_search_20260209 tool, 90s hard timeout via ThreadPoolExecutor
-├── content_generator.py     # Variation angles, conditional prompt assembly, generates GeneratedPost, JSON retry
+├── linkedin_scraper.py      # Apify scraping — primary + fallback actor, flexible field mapping
+├── time_filter.py           # Filters posts by date_from
+├── classifier.py            # Batch Claude classifier — one API call per keyword
+├── researcher.py            # Claude with web_search tool, 90s hard timeout
+├── content_generator.py     # Variation angles, conditional prompt assembly, JSON retry
 ├── image_generator.py       # DALL-E 3 image generation + imgbb upload → permanent URL
-├── sheets_client.py         # Google Sheets writer — 3 fixed columns, append-only, exponential backoff
-├── requirements.txt         # All Python dependencies with versions
-├── .env                     # API keys (gitignored) — 5 keys required
-├── credentials.json         # Google service account JSON (gitignored) — must be shared with sheet
+├── sheets_client.py         # Google Sheets writer — 3 fixed columns, append-only
+├── email_notifier.py        # NEW: SMTP HTML email per post → stores Message-ID in pending_posts.json
+├── linkedin_poster.py       # NEW: LinkedIn API v2 posting (text-only + 3-step image upload)
+├── reply_checker.py         # NEW: IMAP poll → trigger word detection → linkedin_poster call
+├── requirements.txt         # All Python dependencies
+├── .env                     # API keys (gitignored) — 7 keys configured
+├── credentials.json         # Google service account JSON (gitignored)
 ├── CLAUDE.md                # WAT framework agent instructions
-├── CONTEXT.md               # This file — full project context for session restore
+├── CONTEXT.md               # This file
 ├── workflows/
-│   └── linkedin_pipeline.md # WAT SOP — how to run, config reference, setup guide, edge cases
+│   └── linkedin_pipeline.md # WAT SOP
 └── .tmp/
-    ├── pipeline_YYYY-MM-DD.log       # Daily rotating debug log
-    └── used_posts_{keyword}.json     # Per-keyword dedup UIDs (text hashes) — persists across runs
+    ├── pipeline_YYYY-MM-DD.log
+    ├── used_posts_{keyword}.json
+    └── pending_posts.json   # NEW: pending email→LinkedIn post queue, keyed by Message-ID
 ```
 
 ---
@@ -96,8 +111,6 @@ GeneratedPost       # keyword, post_title, post_text, image_prompt,
                     # hook? (Optional), cta_closing? (Optional), hashtags? (Optional[List[str]])
 ```
 
-All optional feature fields are typed `Optional[...]` with `None` default.
-
 ---
 
 ## 5. Current config.yaml Structure
@@ -106,12 +119,10 @@ All optional feature fields are typed `Optional[...]` with `None` default.
 # --- CORE SETTINGS ---
 keywords:
   - "Agentic AI"
-  # - "RPA"
-  # - "n8n"
 
 apify_token: "${APIFY_TOKEN}"
 number_of_posts_to_fetch: 20
-posts_per_keyword: 5        # how many LinkedIn posts to generate per keyword (default: 1)
+posts_per_keyword: 1        # set to 5 for full runs
 research_depth: shallow
 output_sheet_id: "${GOOGLE_SHEET_ID}"
 language: "de"
@@ -133,7 +144,6 @@ engagement_scoring:
 
 voice_samples:
   enabled: false
-  samples: [...]
 
 cta:
   enabled: true
@@ -144,9 +154,29 @@ hashtags:
   broad_count: 2
   niche_count: 3
 
+content_rules:
+  verified_case_studies_only: true
+  cite_statistics: true
+
+post_optimization:
+  enabled: true
+
 image_generation:
   enabled: true
-  # Requires OPENAI_API_KEY and IMGBB_API_KEY in .env
+
+email_notification:
+  enabled: true
+  smtp_host: "smtp.gmail.com"
+  smtp_port: 587
+  sender_email: "${EMAIL_USER}"
+  sender_password: "${EMAIL_PASSWORD}"
+  recipient_email: "${EMAIL_RECIPIENT}"
+  reply_trigger: "Post"
+
+linkedin_posting:
+  enabled: true
+  access_token: "${LINKEDIN_ACCESS_TOKEN}"
+  person_urn: "${LINKEDIN_PERSON_URN}"
 ```
 
 ---
@@ -161,9 +191,6 @@ image_generation:
 | B | Beitragstext | `hook` + `\n\n` + `post_text` + `\n\n` + `cta_closing` + `\n\n` + hashtags |
 | C | Beitragsbild | `=IMAGE("https://i.ibb.co/...")` formula or raw prompt text |
 
-- Header row written only once when sheet is empty
-- All subsequent runs append rows — never overwrites
-
 ---
 
 ## 7. Pipeline Execution Order (per keyword)
@@ -172,163 +199,143 @@ image_generation:
 1. Load used_urls from .tmp/used_posts_{keyword}.json
 2. linkedin_scraper.scrape(keyword, n)          → List[ScrapedPost]
 3. time_filter.filter_by_date(posts, date_from)  → List[ScrapedPost]
-4. Dedup: filter out posts whose UID is in used_urls  [retry ×2 with more scraping if <3 fresh]
+4. Dedup: filter out posts whose UID is in used_urls  [retry ×2 if <3 fresh]
 5. classifier.classify(fresh_posts, keyword)     → List[ClassifiedPost] [retry ×2 if <3]
 6. score_posts() in main.py                      → List[ScoredPost]    [only if enabled]
-7. researcher.research(keyword, depth)           → ResearchSummary     [90s timeout, graceful fallback]
+7. researcher.research(keyword, depth)           → ResearchSummary     [90s timeout]
    Loop N times (posts_per_keyword):
-8. content_generator.generate(..., variation_index=i) → GeneratedPost  [each gets a different angle]
-8b. image_generator.generate_and_upload(prompt)  → image URL           [only if enabled]
+8. content_generator.generate(..., variation_index=i) → GeneratedPost
+8b. content_generator.optimize_post(post, config)    → GeneratedPost    [only if enabled]
+    — assembles title+hook+body+CTA+hashtags, runs LinkedIn optimizer Claude call
+    — result: post_text = full optimized text (title first), hook/cta/hashtags = None
+8c. image_generator.generate_and_upload(prompt)  → image URL           [only if enabled]
+    — _NO_TEXT_SUFFIX appended to every prompt automatically
 9. sheets_client.write(post, config)             → None
+9b. email_notifier.send(post, config)            → Message-ID          [only if enabled]
+   → stores pending post in .tmp/pending_posts.json
    Save UIDs of used posts to .tmp/used_posts_{keyword}.json
 ```
 
-Keywords run sequentially. Any keyword failure is caught, logged, and skipped.
+**Human-in-the-loop publishing:**
+```
+User replies to email with trigger word
+→ python reply_checker.py --once
+→ IMAP matches In-Reply-To header to pending_posts.json entry
+→ linkedin_poster.post_to_linkedin(post_body, image_url, config)
+→ Entry removed from pending_posts.json
+```
 
 ---
 
 ## 8. Content Variation Angles (content_generator.py)
 
 5 angles rotated by `variation_index % 5`:
-1. Business case / ROI with numbers (before/after scenario)
+1. Business case / ROI with numbers
 2. Contrarian / myth-busting
 3. Step-by-step framework or checklist
 4. Trend / prediction / what's changing
-5. Analogy / comparison — make abstract concept tangible
-
-**No storytelling angle** — posts implying personal experience would be fabricated.
+5. Analogy / comparison
 
 ---
 
-## 9. Post Deduplication (main.py)
+## 9. Email → LinkedIn Flow (new in session 4)
 
-- UID per post: `post.url` if non-empty, else `MD5(post.text[:300])`
-- harvestapi returns no URL field → always uses MD5 hash
-- Stored per-keyword in `.tmp/used_posts_{keyword}.json`
-- Loaded at start of each keyword run; saved after all N posts generated successfully
-- If too few fresh posts: retry with 2× and 3× more scraping
+### email_notifier.py
+- Assembles post body (hook + text + cta + hashtags) — mirrors `sheets_client._build_row()`
+- Sends HTML email via SMTP/STARTTLS (Gmail App Password)
+- Stores `{message_id: {post_title, post_body, image_url, sent_at, keyword}}` in `.tmp/pending_posts.json`
 
----
+### reply_checker.py
+- Connects to Gmail IMAP (`imap.gmail.com:993`)
+- Searches UNSEEN emails
+- Matches `In-Reply-To` header against pending Message-IDs
+- Checks first non-empty line for trigger word (case-insensitive)
+- On match: calls `linkedin_poster.post_to_linkedin()`, removes from pending, marks email as read
+- On 401 (token expired): keeps email unread for retry after token refresh
 
-## 10. Key Code Patterns
-
-### Post UID (main.py)
-```python
-def _post_uid(post) -> str:
-    if post.url:
-        return post.url
-    return hashlib.md5(post.text[:300].encode("utf-8")).hexdigest()
-```
-
-### Researcher hard timeout (researcher.py)
-```python
-executor = ThreadPoolExecutor(max_workers=1)
-future = executor.submit(_call_research_api, keyword, max_uses)
-try:
-    result = future.result(timeout=90)
-except TimeoutError:
-    future.cancel()
-    executor.shutdown(wait=False)
-    return fallback_summary
-```
-
-### JSON extraction (content_generator.py)
-```python
-start = text.find('{')
-end = text.rfind('}')
-if start != -1 and end != -1:
-    text = text[start:end + 1]
-data = json.loads(text)
-```
-
-### Image cell detection (sheets_client.py)
-```python
-if post.image_prompt.startswith("https://"):
-    image_cell = f'=IMAGE("{post.image_prompt}")'
-else:
-    image_cell = post.image_prompt
-```
+### linkedin_poster.py
+- Text-only post: `POST /v2/ugcPosts` with `shareMediaCategory: NONE`
+- Image post: Register upload → PUT image bytes → POST ugcPost with asset URN
+- 401 raises `PermissionError` with clear action message
 
 ---
 
-## 11. Environment Setup
+## 10. Environment Setup
 
-### .env (5 required keys)
+### .env (7 configured keys)
 ```
 ANTHROPIC_API_KEY=sk-ant-...
 APIFY_TOKEN=apify_api_...
 GOOGLE_SHEET_ID=1LZ--...
 OPENAI_API_KEY=sk-proj-...
 IMGBB_API_KEY=767d5f...
+EMAIL_USER=raphael.swidnicki@googlemail.com
+EMAIL_PASSWORD=mqfj lebw osle ahkx    # Gmail App Password
+EMAIL_RECIPIENT=raphael.swidnicki@googlemail.com
+LINKEDIN_ACCESS_TOKEN=AQWwfVyrJ...    # w_member_social + openid + profile scopes
+LINKEDIN_PERSON_URN=urn:li:person:C40HzWTIZk
 ```
+
+### LinkedIn App
+- App name: PosterApp
+- Client ID: 78f68xefx6vkmg
+- Company Page: linkedin.com/company/111957742/
+- Products: "Share on LinkedIn" + "Sign In with LinkedIn using OpenID Connect"
+- Token TTL: 2 months — expires ~2026-05-09
+- Person URN discovered via `/v2/userinfo` with openid+profile token
 
 ### credentials.json
 - Service account: `linkedin-generator@n8n-learning-472012.iam.gserviceaccount.com`
-- Google Cloud project: `n8n-learning-472012`
-- Required APIs: Google Sheets API + Google Drive API
-- Sheet must be shared with service account (Editor role)
-- Service accounts CANNOT upload to Google Drive — use imgbb
 
 ### Python environment
-- Python 3.13 (user installation: `%APPDATA%\Python\Python313\site-packages`)
+- Python 3.13 (user installation)
 - Run: `pip install -r requirements.txt`
-
-### Running
-```bash
-cd "c:\Users\Raestro\Dropbox\Documents\Projekte\KI\KI Agentic Automations\LinkedIn Content Generator"
-python main.py
-```
 
 ---
 
-## 12. Known Issues & Status
+## 11. Known Issues & Status
 
 | Issue | Status | Details |
 |---|---|---|
-| Web research timeout | **Known/Handled** | 90s hard limit via ThreadPoolExecutor — pipeline continues without research |
-| `apify_client.py` import conflict | **Fixed** | Renamed to `linkedin_scraper.py` |
-| Date dict parsing | **Fixed** | harvestapi returns date as dict — `_parse_date()` handles dicts first |
-| Apify wrong input params | **Fixed** | Actor requires `searchQueries: [keyword]` + `maxPosts: n` |
-| Google Drive upload | **Fixed** | Service accounts have no Drive quota — replaced with imgbb |
-| Hook/CTA duplication | **Fixed** | Prompt explicitly says "Do NOT include in post_text" |
-| Engagement scores always 0 | **Open** | harvestapi field names for likes/comments/shares TBD. Scoring runs but all scores = 0. |
-| URL field empty | **Mitigated** | harvestapi returns no URL field. Dedup uses text-hash as fallback UID. |
-| JSON parse errors | **Fixed** | Robust `{...}` extraction + "no double quotes" prompt rule |
-| Identical posts across N generations | **Fixed** | 5 variation angles rotated by post_idx |
+| Web research timeout | **Known/Handled** | 90s hard limit — pipeline continues without research |
+| Engagement scores always 0 | **Open** | harvestapi field names for likes/comments/shares unknown |
+| URL field empty | **Mitigated** | text-hash dedup fallback |
+| LinkedIn token expiry | **Known** | Tokens expire in ~2 months. Refresh manually at developer.linkedin.com/tools/oauth/token-generator |
 
 ---
 
-## 13. Pending Tasks / Next Steps
+## 12. Pending Tasks / Next Steps
 
 ### High Priority
-- [ ] **Debug engagement scoring**: Print raw Apify item to confirm field names for likes/comments/shares. Update `FIELD_MAPS` in `linkedin_scraper.py`
-- [ ] **Re-enable all 3 keywords**: Uncomment RPA and n8n in `config.yaml` for full run
+- [ ] **End-to-end test with all new features**: Run `python main.py` → verify post has title as first line, stat citations, no invented case studies, optimized text → email arrives → reply "Post" → `python reply_checker.py --once` → LinkedIn post live
+- [ ] **Reset posts_per_keyword to 5** in config.yaml after test
+- [ ] **Re-enable all 3 keywords**: Uncomment RPA and n8n in config.yaml
 
 ### Medium Priority
-- [ ] **Add voice samples**: Set `voice_samples.enabled: true` and populate with real LinkedIn posts in user's style
-- [ ] **Review generated post quality**: Check Sheet — adjust `post_style` or system prompt if needed
+- [ ] **Debug engagement scoring**: Print raw Apify item to confirm field names
+- [ ] **Add voice samples**: Set `voice_samples.enabled: true`
 - [ ] **Push all changes to GitHub**: `git add . && git commit && git push`
 
 ### Low Priority
-- [ ] **Add `sortBy: date`** to Apify input to get newest posts first
+- [ ] **Add `sortBy: date`** to Apify input
 - [ ] **Consider `research_depth: deep`** for higher quality posts
-- [ ] **Clean up stale cache**: Delete `__pycache__/apify_client.cpython-313.pyc`
+- [ ] **Set up Windows Task Scheduler** for automatic `reply_checker.py` polling
 
 ---
 
-## 14. Apify Actor Details
+## 13. Apify Actor Details
 
 **Primary:** `harvestapi/linkedin-post-search`
 - Input: `{"searchQueries": ["keyword"], "maxPosts": 20}`
 - Date field: returns a dict `{"timestamp": ms, "date": "ISO", ...}`
-- URL field: NOT returned (harvestapi does not include post URL)
+- URL field: NOT returned
 - Engagement fields: exact names unknown (scores always 0)
 
 **Fallback:** `curious_coder/linkedin-post-search-scraper`
 
 ---
 
-## 15. Claude API Usage
+## 14. Claude API Usage
 
 | Step | Model | Tool | Cost approx |
 |---|---|---|---|
@@ -341,9 +348,8 @@ Full run (3 keywords × 5 posts) ≈ $0.80 total.
 
 ---
 
-## 16. Git Repository
+## 15. Git Repository
 
 - Remote: https://github.com/knowledgeseek3r/Linkedin-Generator
-- Auth: PAT stored in git remote URL (local only)
-- Last push: initial commit (session 1 only)
-- **Pending**: commit + push all session 2+3 changes
+- Last commit: `feat: email notification + LinkedIn human-in-the-loop posting` (session 4)
+- **Pending**: push session 4 changes after reply_checker test passes
