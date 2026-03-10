@@ -1,7 +1,7 @@
 # Project Context — LinkedIn Content Intelligence & Generation Pipeline
 
-> Last updated: 2026-03-09
-> Status: **Session 7 complete — content quality fixes (source citations, Praxis-Beispiel rule, CTA variety) — end-to-end tested ✅**
+> Last updated: 2026-03-10
+> Status: **Session 8 complete — theme history + angle-aware optimizer + stat dedup fix — tested ✅**
 
 ---
 
@@ -18,22 +18,28 @@ A fully automated WAT-framework Python pipeline that:
    — Each post gets a distinct content angle (5 rotating angles, persisted across runs)
    — Content rules: only verified analyst-house case studies, all stats must cite source inline
    — No first-person "ich" language — industry analyst / knowledge-article style
+   — **Theme history**: last 20 generated posts (cross-keyword) injected as "NICHT WIEDERHOLEN" constraint
+   — **Stat dedup**: same statistics/sources explicitly forbidden if they appear in theme history
 8. **Post-optimizer** — second Claude call after generation, before image gen (~1300 chars)
+   — Now **angle-aware**: preserves structural form matching the generation angle
 9. **Ideogram V3 image generation** — 3 images per post using optimized visual metaphor prompt
    — No random text; precise text rules to avoid spelling errors
    — Upload to imgbb for permanent URLs
+   — **Optional**: `image_generation.enabled: false` for testing (no images, "Post" reply only)
 10. Writes 3-column output to Google Sheets: Thema/Titel | Beitragstext | Beitragsbild (image 1)
 11. **3-image email selection** — HTML email shows 3 images side-by-side with labels 1/2/3
     — Reply with `1`, `2`, or `3` → posts selected image to LinkedIn
     — Fallback: reply with trigger word (`Post`) → posts image 1
+    — When images disabled: text-only email, "Post" reply only
 12. Reply-triggered LinkedIn posting — `reply_checker.py` → posts to LinkedIn API v2
     — IMAP SINCE filter: only checks last 10 days of unread emails (not all 3813)
 
-**Confirmed working (2026-03-09):**
+**Confirmed working (2026-03-10):**
 - Full pipeline: "Intelligent Automation" → 3 Ideogram V3 images → email with image grid → reply "3" → Bild 3 auf LinkedIn ✅
-- Angle rotation across runs working (angle 0 for new keyword) ✅
-- Perplexity research: ~9s, 7-10 sources ✅
-- Session 7: source citations preserved by optimizer, "Ein Beispiel aus der Praxis:" rule enforced, CTA variety improved ✅
+- Theme history active: 5+ posts tracked cross-keyword, angle 0-4 cycling correctly ✅
+- Image-disabled mode: text-only email, "Post" trigger, no Ideogram calls ✅
+- Angle-aware optimizer preserves framework/checklist structure ✅
+- Stat/source dedup: 500-char snippet + explicit "keine bereits zitierten Statistiken" rule ✅
 
 ---
 
@@ -52,6 +58,7 @@ A fully automated WAT-framework Python pipeline that:
 | Image prompt | Detailed visual metaphor rules (no collage, text rules) | Prevents keyword-dump + spelling errors |
 | 3 images per post | `generate_multiple(n=3)` in `image_generator.py` | Human selection improves quality |
 | Image selection | Reply with `1`/`2`/`3` in email | Simple UX, no extra UI needed |
+| Image disabled mode | `image_generation.enabled: false` in config.yaml | Faster/cheaper testing; email uses "Post" trigger only |
 | Email image grid | HTML table with 3×180px images + bold number labels | Clear visual selection |
 | IMAP filter | `UNSEEN SINCE last-10-days` | Avoids scanning 3813 old emails |
 | Image in Sheets | `=IMAGE("url")` formula | Embeds image directly in Sheets cell |
@@ -61,8 +68,11 @@ A fully automated WAT-framework Python pipeline that:
 | Hook/CTA/Hashtags | All merged into Beitragstext (column B) | No separate columns |
 | Content rules | `content_rules` flags in config.yaml, injected into generation prompt | Configurable per run |
 | Post optimizer | Second Claude call, assembles full text then optimizes | Clean separation |
+| Angle-aware optimizer | `variation_index` passed to `optimize_post()`, `ANGLE_STRUCTURE_HINTS` dict | Preserves structural form per angle |
 | No-Ich rule | In `SYSTEM_PROMPT_TEMPLATE` — industry analyst style enforced | No personal coaching language |
 | Angle tracking | `_load/_save_last_angle()` persisted per keyword in `.tmp/` | Cross-run variation |
+| Theme history | `generated_themes.json` in `.tmp/`, last 20 entries, 500-char snippets | Prevents cross-keyword + same-keyword repetition |
+| Stat dedup | Explicit rule in BEREITS ABGEDECKT block + 500-char snippet | Prevents same Bitkom/Deloitte stat from repeating |
 | Logging | `loguru` | Dual output: stderr (INFO) + `.tmp/pipeline_DATE.log` (DEBUG) |
 | Post deduplication | MD5 hash of first 300 chars in `.tmp/used_posts_{keyword}.json` | harvestapi returns no URL |
 | Email sending | SMTP (smtplib) + Gmail App Password | Stdlib, no new dependencies |
@@ -75,7 +85,7 @@ A fully automated WAT-framework Python pipeline that:
 
 ```
 LinkedIn Content Generator/
-├── main.py                  # Orchestrator — pipeline per keyword, dedup, retry, email notification
+├── main.py                  # Orchestrator — pipeline per keyword, dedup, retry, email notification, theme history
 ├── config.yaml              # All settings + optional feature flags
 ├── config_loader.py         # Loads YAML, resolves ${ENV_VAR}, validates all sections
 ├── models.py                # Pydantic models for all data types
@@ -83,14 +93,14 @@ LinkedIn Content Generator/
 ├── time_filter.py           # Filters posts by date_from
 ├── classifier.py            # Batch Claude classifier — one API call per keyword
 ├── researcher.py            # Perplexity API research (sonar/sonar-pro, ~9s)
-├── content_generator.py     # Variation angles, Ideogram image prompt rules, conditional prompt assembly
+├── content_generator.py     # Variation angles, ANGLE_STRUCTURE_HINTS, theme history injection, image prompt rules
 ├── image_generator.py       # Ideogram V3 (3 images) + DALL-E 3 fallback + imgbb upload
 ├── sheets_client.py         # Google Sheets writer — 3 fixed columns, append-only
-├── email_notifier.py        # SMTP HTML email — 3-image grid, image_urls in pending_posts.json
+├── email_notifier.py        # SMTP HTML email — 3-image grid or text-only (when images disabled)
 ├── linkedin_poster.py       # LinkedIn API v2 posting (text-only + 3-step image upload)
 ├── reply_checker.py         # IMAP poll (last 10 days) → 1/2/3 selection → linkedin_poster call
 ├── requirements.txt         # All Python dependencies
-├── .env                     # API keys (gitignored) — 8 keys configured
+├── .env                     # API keys (gitignored) — 12 keys configured
 ├── credentials.json         # Google service account JSON (gitignored)
 ├── CLAUDE.md                # WAT framework agent instructions
 ├── CONTEXT.md               # This file
@@ -100,7 +110,8 @@ LinkedIn Content Generator/
     ├── pipeline_YYYY-MM-DD.log
     ├── used_posts_{keyword}.json
     ├── last_angle_{keyword}.json
-    └── pending_posts.json   # pending email→LinkedIn post queue, keyed by Message-ID
+    ├── generated_themes.json    # Cross-keyword theme history (last 20 entries, 500-char snippets)
+    └── pending_posts.json       # pending email→LinkedIn post queue, keyed by Message-ID
 ```
 
 ---
@@ -123,7 +134,7 @@ GeneratedPost       # keyword, post_title, post_text, image_prompt,
 ```yaml
 # --- CORE SETTINGS ---
 keywords:
-  - "Agentic AI"   # currently: Intelligent Automation active for test
+  - "Intelligent Automation"   # currently single keyword for testing
 
 apify_token: "${APIFY_TOKEN}"
 number_of_posts_to_fetch: 20
@@ -167,8 +178,8 @@ post_optimization:
   enabled: true
 
 image_generation:
-  enabled: true
-  provider: ideogram   # ideogram (V3) | dalle3
+  enabled: false   # set to true for production runs
+  provider: ideogram
 
 email_notification:
   enabled: true
@@ -177,7 +188,7 @@ email_notification:
   sender_email: "${EMAIL_USER}"
   sender_password: "${EMAIL_PASSWORD}"
   recipient_email: "${EMAIL_RECIPIENT}"
-  reply_trigger: "Post"   # fallback; reply with 1/2/3 to select image
+  reply_trigger: "Post"
 
 linkedin_posting:
   enabled: true
@@ -195,7 +206,7 @@ linkedin_posting:
 |---|---|---|
 | A | Thema / Titel | `post_title` |
 | B | Beitragstext | optimized full post text (title first) |
-| C | Beitragsbild | `=IMAGE("https://i.ibb.co/...")` formula (image 1) |
+| C | Beitragsbild | `=IMAGE("https://i.ibb.co/...")` formula (image 1) or raw prompt text if images disabled |
 
 ---
 
@@ -209,30 +220,30 @@ linkedin_posting:
 5. classifier.classify(fresh_posts, keyword)     → List[ClassifiedPost] [retry ×2 if <3]
 6. score_posts() in main.py                      → List[ScoredPost]    [only if enabled]
 7. researcher.research(keyword, depth)           → ResearchSummary     [Perplexity, ~9s]
+   Load theme_history from .tmp/generated_themes.json
    Loop N times (posts_per_keyword):
-8. content_generator.generate(..., variation_index=i) → GeneratedPost
-8b. content_generator.optimize_post(post, config)    → GeneratedPost    [only if enabled]
-8c. image_generator.generate_multiple(prompt, n=3)   → List[str] (3 image URLs)
+8. content_generator.generate(..., variation_index=i, theme_history=history) → GeneratedPost
+8b. content_generator.optimize_post(post, config, variation_index=i)        → GeneratedPost
+8c. image_generator.generate_multiple(prompt, n=3)                          → List[str]  [only if enabled]
     — Ideogram V3 via https://api.ideogram.ai/v1/ideogram-v3/generate
     — aspect_ratio: 1x1, rendering_speed: QUALITY
     — All 3 uploaded to imgbb for permanent URLs
-9. sheets_client.write(post, config)             → None  (uses image_urls[0])
+   _save_theme_entry(keyword, title, post_text[:500])  → generated_themes.json updated
+9. sheets_client.write(post, config)             → None  (uses image_urls[0] or raw prompt)
 9b. email_notifier.send(post, config, image_urls=[...]) → Message-ID
-   → 3-image HTML grid, stores image_urls in pending_posts.json
    Save UIDs of used posts to .tmp/used_posts_{keyword}.json
    Save last angle to .tmp/last_angle_{keyword}.json
 ```
 
 **Human-in-the-loop publishing:**
 ```
-User replies to email with "1", "2", or "3"
+User replies to email with "1", "2", or "3"  (or just "Post" if images disabled)
 → python reply_checker.py --once
 → IMAP searches UNSEEN emails from last 10 days only
 → Matches In-Reply-To header to pending_posts.json entry
-→ Reads first_line: "1"/"2"/"3" → picks image_urls[idx]
+→ Reads first_line: "1"/"2"/"3" → picks image_urls[idx]  |  "Post" → uses image_url (or None)
 → linkedin_poster.post_to_linkedin(post_body, selected_image_url, config)
 → Entry removed from pending_posts.json
-Fallback: reply with "Post" → uses image_urls[0]
 ```
 
 ---
@@ -246,9 +257,32 @@ Fallback: reply with "Post" → uses image_urls[0]
 4. Trend / prediction / what's changing
 5. Analogy / comparison
 
+**ANGLE_STRUCTURE_HINTS** — passed to optimizer so it preserves structural form:
+- 0: ROI → lead with numbers, preserve before/after structure
+- 1: Contrarian → keep counter-thesis first, no normalization
+- 2: Framework → preserve numbered/bullet list, do NOT flatten
+- 3: Trend → forward-looking framing stays at front
+- 4: Analogy → preserve comparison structure as core
+
 ---
 
-## 9. Image Generation — Ideogram V3
+## 9. Theme History (main.py + content_generator.py)
+
+**File:** `.tmp/generated_themes.json`
+**Schema:** `[{keyword, title, snippet (500 chars), date}, ...]` — max 20 entries, newest first
+**Injection:** Before generation, last 10 entries injected as:
+```
+BEREITS ABGEDECKTE THEMEN — NICHT WIEDERHOLEN:
+...
+Insbesondere: Verwende KEINE Statistiken oder Quellen die in diesen Posts bereits zitiert wurden
+— wähle andere Zahlen, andere Studien, andere Quellen.
+- "Title" (keyword, date): snippet...
+```
+**Saves after:** Each successful post generation (before Sheets write)
+
+---
+
+## 10. Image Generation — Ideogram V3
 
 **API:** `POST https://api.ideogram.ai/v1/ideogram-v3/generate`
 - Body (flat JSON, NOT nested in `image_request`): `{"prompt": ..., "aspect_ratio": "1x1", "rendering_speed": "QUALITY"}`
@@ -260,7 +294,6 @@ Fallback: reply with "Post" → uses image_urls[0]
 - Cinematic/minimalist, photorealistic or clean digital art
 - Max 1 word of text; must be short, common English, not from post title
 - Default: NO TEXT
-- No word clouds, collages, random icons
 
 **3 images per post:**
 - `image_generator.generate_multiple(prompt, keyword, config, n=3)` → `List[str]`
@@ -268,19 +301,19 @@ Fallback: reply with "Post" → uses image_urls[0]
 
 ---
 
-## 10. Email → LinkedIn Flow
+## 11. Email → LinkedIn Flow
 
 ### email_notifier.py
 - Assembles post body (hook + text + cta + hashtags)
-- HTML email shows 3 images in table layout (180px each), bold number labels
-- CTA: "Antworte mit 1, 2 oder 3 um das gewählte Bild zu veröffentlichen"
+- **With images:** HTML email shows 3 images in table layout (180px each), bold number labels; CTA: "Antworte mit 1, 2 oder 3"
+- **Without images:** Text-only email; CTA: "Antworte mit **Post**"
 - Stores `{message_id: {post_title, post_body, image_url, image_urls, sent_at, keyword}}` in pending_posts.json
 
 ### reply_checker.py
 - IMAP `(UNSEEN SINCE "DD-Mon-YYYY")` — last 10 days only
 - Matches `In-Reply-To` header against pending Message-IDs
-- `first_line in ("1", "2", "3")` → `selected_image = image_urls[idx]`
-- `reply_trigger` in first_line → uses `image_url` (= image 1, backward compat)
+- `first_line in ("1", "2", "3")` AND `image_urls` not empty → `selected_image = image_urls[idx]`
+- `reply_trigger` in first_line → uses `image_url` (or None for text-only post)
 - On 401: keeps email unread for retry after token refresh
 
 ### linkedin_poster.py
@@ -289,9 +322,9 @@ Fallback: reply with "Post" → uses image_urls[0]
 
 ---
 
-## 11. Environment Setup
+## 12. Environment Setup
 
-### .env (8 configured keys)
+### .env (12 configured keys)
 ```
 ANTHROPIC_API_KEY=sk-ant-...
 APIFY_TOKEN=apify_api_...
@@ -322,7 +355,7 @@ LINKEDIN_PERSON_URN=urn:li:person:C40HzWTIZk
 
 ---
 
-## 12. Known Issues & Status
+## 13. Known Issues & Status
 
 | Issue | Status | Details |
 |---|---|---|
@@ -330,16 +363,19 @@ LINKEDIN_PERSON_URN=urn:li:person:C40HzWTIZk
 | Engagement scores always 0 | **Open** | harvestapi field names for likes/comments/shares unknown |
 | URL field empty | **Mitigated** | text-hash dedup fallback |
 | LinkedIn token expiry | **Known** | Tokens expire ~2026-05-09. Refresh at developer.linkedin.com/tools/oauth/token-generator |
-| Image quality (DALL-E) | **Fixed** | Replaced with Ideogram V3 + 3-image selection |
+| Post similarity cross-keyword | **Fixed (session 8)** | Theme history + angle-aware optimizer |
+| Same stat repeating (Bitkom 40,9%) | **Fixed (session 8)** | 500-char snippet + explicit stat-dedup rule |
+| Dedup exhaustion during testing | **Known** | Many test runs exhaust the fresh post pool for one keyword; delete `.tmp/used_posts_{keyword}.json` to reset |
 
 ---
 
-## 13. Pending Tasks / Next Steps
+## 14. Pending Tasks / Next Steps
 
 ### High Priority
 - [ ] **Reset `posts_per_keyword` to 5** in config.yaml for production runs
 - [ ] **Re-enable all keywords** (Agentic AI, RPA/Sovereign AI, n8n) in config.yaml
-- [ ] **Commit + push session 6+7 changes** to GitHub
+- [ ] **Re-enable image generation** (`image_generation.enabled: true`) for production
+- [ ] **Commit + push session 8 changes** to GitHub
 
 ### Medium Priority
 - [ ] **Debug engagement scoring**: Print raw Apify item to confirm field names (scores always 0)
@@ -352,7 +388,7 @@ LINKEDIN_PERSON_URN=urn:li:person:C40HzWTIZk
 
 ---
 
-## 14. Claude API & Cost
+## 15. Claude API & Cost
 
 | Step | Model/Service | Cost approx |
 |---|---|---|
@@ -364,11 +400,12 @@ LINKEDIN_PERSON_URN=urn:li:person:C40HzWTIZk
 
 Full run (3 keywords × 5 posts) ≈ $4.50 total (image-heavy).
 With `provider: dalle3`: ≈ $1.50 total.
+Without images: ≈ $0.18 total.
 
 ---
 
-## 15. Git Repository
+## 16. Git Repository
 
 - Remote: https://github.com/knowledgeseek3r/Linkedin-Generator
-- Last pushed commit: `feat: content quality rules, post optimizer, Perplexity research, angle tracking` (session 5)
-- **Pending push**: session 6 changes (Ideogram V3, 3-image selection, email grid, reply_checker fix)
+- Last pushed commit: `feat: Ideogram V3 3-image selection, email grid, reply_checker IMAP fix, content quality rules` (sessions 6+7)
+- **Pending push**: session 8 changes (theme history, angle-aware optimizer, stat dedup, image-disabled mode)

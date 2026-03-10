@@ -2,6 +2,7 @@ import sys
 import os
 import json
 import hashlib
+from datetime import date
 from loguru import logger
 from config_loader import load_config
 import linkedin_scraper as apify_client
@@ -69,6 +70,31 @@ def _save_last_angle(keyword: str, angle: int) -> None:
         json.dump({"last_angle": angle}, f)
 
 
+_THEMES_FILE = ".tmp/generated_themes.json"
+_MAX_THEME_HISTORY = 20
+
+
+def _load_theme_history() -> list:
+    if os.path.exists(_THEMES_FILE):
+        with open(_THEMES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+
+def _save_theme_entry(keyword: str, title: str, snippet: str) -> None:
+    os.makedirs(".tmp", exist_ok=True)
+    history = _load_theme_history()
+    history.insert(0, {
+        "keyword": keyword,
+        "title": title,
+        "snippet": snippet[:500],
+        "date": str(date.today()),
+    })
+    history = history[:_MAX_THEME_HISTORY]
+    with open(_THEMES_FILE, "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, indent=2)
+
+
 def _save_used_urls(keyword: str, new_urls: set) -> None:
     path = _used_urls_path(keyword)
     existing = _load_used_urls(keyword)
@@ -77,9 +103,60 @@ def _save_used_urls(keyword: str, new_urls: set) -> None:
         json.dump(combined, f, indent=2)
 
 
+_ROTATION_FILE = ".tmp/keyword_rotation.json"
+
+
+def _load_rotation_state() -> dict:
+    if os.path.exists(_ROTATION_FILE):
+        with open(_ROTATION_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"run_counts": {}, "active_index": 0}
+
+
+def _save_rotation_state(state: dict) -> None:
+    os.makedirs(".tmp", exist_ok=True)
+    with open(_ROTATION_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
+
+
+def _get_active_keywords(config: dict) -> list:
+    all_keywords = config["keywords"]
+    kr_cfg = config.get("keyword_rotation", {})
+
+    if not kr_cfg.get("enabled"):
+        return all_keywords
+
+    pinned = kr_cfg.get("pinned", [])
+
+    if pinned:
+        logger.info(f"Keyword rotation: using pinned keyword(s): {pinned}")
+        return pinned
+
+    max_runs = kr_cfg["max_runs_per_keyword"]
+    state = _load_rotation_state()
+    run_counts = state.get("run_counts", {})
+    active_index = state.get("active_index", 0) % len(all_keywords)
+    active_kw = all_keywords[active_index]
+
+    if run_counts.get(active_kw, 0) >= max_runs:
+        new_index = (active_index + 1) % len(all_keywords)
+        if new_index == 0:
+            run_counts = {}
+        state["active_index"] = new_index
+        state["run_counts"] = run_counts
+        _save_rotation_state(state)
+        active_kw = all_keywords[new_index]
+
+    logger.info(
+        f"Keyword rotation: active='{active_kw}' "
+        f"(run {run_counts.get(active_kw, 0) + 1}/{max_runs})"
+    )
+    return [active_kw]
+
+
 def run_pipeline(config: dict) -> None:
     date_from = config["date_from"]
-    keywords = config["keywords"]
+    keywords = _get_active_keywords(config)
     n_fetch = config["number_of_posts_to_fetch"]
     scoring_cfg = config.get("engagement_scoring", {})
 
@@ -146,22 +223,27 @@ def run_pipeline(config: dict) -> None:
 
             # Steps 6+7: Generate and write N posts per keyword
             last_angle = _load_last_angle(keyword)
+            theme_history = _load_theme_history()
+            logger.debug(f"Theme history: {len(theme_history)} entries loaded")
             for post_idx in range(posts_per_keyword):
                 variation_index = (last_angle + 1 + post_idx) % 5
                 logger.info(f"Generating post {post_idx + 1}/{posts_per_keyword} for '{keyword}' (angle {variation_index})")
 
                 # Step 6: Content generation
-                post = content_generator.generate(keyword, posts_for_gen, research, config, variation_index=variation_index)
+                post = content_generator.generate(keyword, posts_for_gen, research, config, variation_index=variation_index, theme_history=theme_history)
 
                 # Step 6b: Post optimization (optional) — runs BEFORE image generation
                 if config.get("post_optimization", {}).get("enabled"):
-                    post = content_generator.optimize_post(post, config)
+                    post = content_generator.optimize_post(post, config, variation_index=variation_index)
 
                 # Step 6c: Image generation — 3 images for selection (optional)
                 image_urls = []
                 if config.get("image_generation", {}).get("enabled"):
                     image_urls = image_generator.generate_multiple(post.image_prompt, keyword, config, n=3)
                     post = post.model_copy(update={"image_prompt": image_urls[0]})
+
+                # Save theme entry so future runs avoid repeating these arguments
+                _save_theme_entry(keyword, post.post_title, post.post_text)
 
                 # Step 7: Write to Google Sheets (uses first image = post.image_prompt)
                 sheets_client.write(post, config)
@@ -183,6 +265,14 @@ def run_pipeline(config: dict) -> None:
             logger.info(f"Saved {len(posts_for_gen)} used post URLs for '{keyword}'")
 
             success_count += 1
+
+            # Increment rotation run counter for non-pinned keywords
+            kr_cfg = config.get("keyword_rotation", {})
+            if kr_cfg.get("enabled") and not kr_cfg.get("pinned"):
+                state = _load_rotation_state()
+                state.setdefault("run_counts", {})[keyword] = \
+                    state["run_counts"].get(keyword, 0) + 1
+                _save_rotation_state(state)
 
         except Exception as e:
             logger.error(f"Pipeline failed for '{keyword}': {e}")

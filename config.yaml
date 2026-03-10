@@ -1,12 +1,23 @@
 # --- CORE SETTINGS ---
 keywords:
-  #- "Agentic AI"
-  # - "Sovereign AI"
-  # - "n8n"
-  - "Intelligent Automation"
-  # "Claude Code"
-  # "Antigravity" 
+  - "Claude Code"
+  - "Antigravity" 
   # "Codex"
+  - "Agentic AI"
+  - "Ai Agents"
+  - "n8n"
+  - "Intelligent Automation"
+  # "Codex"
+    # - "Sovereign AI"
+
+# --- KEYWORD ROTATION ---
+# enabled: true  → rotate through keywords; each gets max_runs_per_keyword runs before switching
+# pinned: [...]  → if set, ONLY these keywords are used every run (rotation skipped)
+# pinned: []     → no pinned keywords, full rotation active
+keyword_rotation:
+  enabled: true
+  max_runs_per_keyword: 3
+  pinned: []   # e.g. ["Intelligent Automation"] to always use that keyword
 
 apify_token: "${APIFY_TOKEN}"
 number_of_posts_to_fetch: 20
@@ -66,7 +77,7 @@ post_optimization:
 # Feature 9: Image generation (provider → imgbb → =IMAGE() in Sheets)
 # provider options: ideogram (V3, recommended) | dalle3 (DALL-E 3)
 image_generation:
-  enabled: true
+  enabled: true   # set to true for production runs
   provider: ideogram   # Requires IDEOGRAM_API_KEY in .env
   # provider: dalle3   # Requires OPENAI_API_KEY in .env
 

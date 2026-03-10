@@ -91,4 +91,21 @@ def load_config(path: str = "config.yaml") -> dict:
                 "config.yaml: 'linkedin_posting.person_urn' must start with 'urn:li:person:'"
             )
 
+    # Validate keyword_rotation (optional section)
+    kr_cfg = config.get("keyword_rotation", {})
+    if kr_cfg.get("enabled"):
+        max_runs = kr_cfg.get("max_runs_per_keyword")
+        if not isinstance(max_runs, int) or max_runs < 1:
+            raise ValueError(
+                "config.yaml: 'keyword_rotation.max_runs_per_keyword' must be a positive integer"
+            )
+        pinned = kr_cfg.get("pinned", [])
+        if not isinstance(pinned, list):
+            raise ValueError("config.yaml: 'keyword_rotation.pinned' must be a list")
+        for p in pinned:
+            if p not in config.get("keywords", []):
+                raise ValueError(
+                    f"config.yaml: pinned keyword '{p}' is not in the 'keywords' list"
+                )
+
     return config

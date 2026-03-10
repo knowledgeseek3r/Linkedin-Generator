@@ -13,6 +13,14 @@ VARIATION_ANGLES = [
     "Explain a complex concept with a clear analogy or comparison — make the abstract tangible for a non-technical audience.",
 ]
 
+ANGLE_STRUCTURE_HINTS = {
+    0: "This is a ROI/Business-case post. Preserve quantitative before/after structure. Lead with numbers. Do NOT generalize away from the concrete data.",
+    1: "This is a contrarian/myth-busting post. Lead with the counter-thesis. Structural disruption is intentional — do NOT normalize into generic paragraph flow.",
+    2: "This is a framework/checklist post. Preserve numbered or bullet structure. Do NOT flatten steps into prose paragraphs — the list IS the value.",
+    3: "This is a trend/prediction post. Forward-looking statements stay at the front. Preserve speculative language and future framing.",
+    4: "This is an analogy/comparison post. Preserve the comparison structure. The analogy is the core insight — do NOT replace with generic claims.",
+}
+
 CTA_INSTRUCTIONS = {
     "frage_an_community": (
         "Write a direct question to the community that invites discussion. "
@@ -69,12 +77,25 @@ def _build_user_prompt(
     research: ResearchSummary,
     config: dict,
     variation_index: int = 0,
+    theme_history: list = None,
 ) -> str:
     angle = VARIATION_ANGLES[variation_index % len(VARIATION_ANGLES)]
     parts = [
         f'Create a LinkedIn post about the topic: "{keyword}"\n',
         f'POST ANGLE (mandatory — your post MUST follow this specific angle): {angle}\n',
     ]
+
+    # Theme history — inject already-covered topics as hard constraint
+    if theme_history:
+        history_lines = "\n".join(
+            f'- "{e["title"]}" ({e["keyword"]}, {e["date"]}): {e["snippet"]}'
+            for e in theme_history[:10]
+        )
+        parts.append(f"""BEREITS ABGEDECKTE THEMEN — NICHT WIEDERHOLEN:
+Die folgenden Argumente, Thesen und Strukturen wurden in letzten Posts bereits verwendet. Wähle eine ANDERE Argumentation, einen anderen Blickwinkel, andere Beispiele und andere Kernaussagen:
+Insbesondere: Verwende KEINE Statistiken oder Quellen die in diesen Posts bereits zitiert wurden — wähle andere Zahlen, andere Studien, andere Quellen.
+{history_lines}
+""")
 
     # Voice samples injection
     voice = config.get("voice_samples", {})
@@ -181,10 +202,11 @@ def generate(
     research: ResearchSummary,
     config: dict,
     variation_index: int = 0,
+    theme_history: list = None,
 ) -> GeneratedPost:
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(post_style=config.get("post_style", "concise, data-driven"))
-    user_prompt = _build_user_prompt(keyword, posts, research, config, variation_index)
+    user_prompt = _build_user_prompt(keyword, posts, research, config, variation_index, theme_history or [])
 
     logger.info(f"Generating post for '{keyword}'")
 
@@ -210,7 +232,7 @@ def generate(
             raise RuntimeError(f"Content generation failed for '{keyword}' after retry: {e}") from e
 
 
-def optimize_post(post: GeneratedPost, config: dict) -> GeneratedPost:
+def optimize_post(post: GeneratedPost, config: dict, variation_index: int = 0) -> GeneratedPost:
     """Assemble full post text (title first), run LinkedIn optimization, return updated post."""
     # Assemble full text: title → hook → body → CTA → hashtags
     parts = [post.post_title]
@@ -223,13 +245,17 @@ def optimize_post(post: GeneratedPost, config: dict) -> GeneratedPost:
         parts.append(" ".join(post.hashtags))
     assembled = "\n\n".join(parts)
 
+    # Add angle-specific structure hint so optimizer preserves the structural form
+    angle_hint = ANGLE_STRUCTURE_HINTS.get(variation_index % 5, "")
+    prompt = OPTIMIZE_PROMPT + (f"\n\nAngle-specific structure rule: {angle_hint}" if angle_hint else "")
+
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     logger.info(f"Optimizing post: '{post.post_title}'")
 
     response = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=2000,
-        messages=[{"role": "user", "content": f"{OPTIMIZE_PROMPT}\n\n---\n{assembled}"}],
+        messages=[{"role": "user", "content": f"{prompt}\n\n---\n{assembled}"}],
     )
     optimized = response.content[0].text.strip()
     logger.success(f"Post optimized ({len(optimized)} chars): '{post.post_title}'")
