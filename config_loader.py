@@ -66,16 +66,18 @@ def load_config(path: str = "config.yaml") -> dict:
     days = value * UNIT_TO_DAYS[unit]
     config["date_from"] = datetime.now(timezone.utc) - timedelta(days=days)
 
-    # Validate email_notification section
-    email_cfg = config.get("email_notification", {})
-    if email_cfg.get("enabled"):
-        for key in ["smtp_host", "smtp_port", "sender_email", "sender_password",
-                    "recipient_email", "reply_trigger"]:
-            if not email_cfg.get(key):
-                raise ValueError(
-                    f"config.yaml: 'email_notification.{key}' is required "
-                    "when email_notification.enabled is true"
-                )
+    # Validate telegram_notification section
+    tg_cfg = config.get("telegram_notification", {})
+    if tg_cfg.get("enabled"):
+        import os as _os
+        if not _os.getenv("TELEGRAM_BOT_TOKEN"):
+            raise ValueError(
+                "TELEGRAM_BOT_TOKEN is not set in .env — required when telegram_notification.enabled is true"
+            )
+        if not _os.getenv("TELEGRAM_CHAT_ID"):
+            raise ValueError(
+                "TELEGRAM_CHAT_ID is not set in .env — required when telegram_notification.enabled is true"
+            )
 
     # Validate linkedin_posting section
     li_cfg = config.get("linkedin_posting", {})

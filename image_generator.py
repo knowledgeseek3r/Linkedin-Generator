@@ -64,7 +64,7 @@ def _upload_to_imgbb(image_bytes: bytes) -> str:
     data = response.json()
     if not data.get("success"):
         raise RuntimeError(f"imgbb upload failed: {data}")
-    url = data["data"]["display_url"]
+    url = data["data"]["url"]
     logger.debug(f"Uploaded to imgbb: {url}")
     return url
 

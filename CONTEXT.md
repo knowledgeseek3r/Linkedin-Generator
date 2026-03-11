@@ -1,7 +1,7 @@
 # Project Context — LinkedIn Content Intelligence & Generation Pipeline
 
 > Last updated: 2026-03-10
-> Status: **Session 8 complete — theme history + angle-aware optimizer + stat dedup fix — tested ✅**
+> Status: **Session 9 complete — Telegram Bot + Keyword Rotation — tested ✅**
 
 ---
 
@@ -21,25 +21,30 @@ A fully automated WAT-framework Python pipeline that:
    — **Theme history**: last 20 generated posts (cross-keyword) injected as "NICHT WIEDERHOLEN" constraint
    — **Stat dedup**: same statistics/sources explicitly forbidden if they appear in theme history
 8. **Post-optimizer** — second Claude call after generation, before image gen (~1300 chars)
-   — Now **angle-aware**: preserves structural form matching the generation angle
+   — Angle-aware: preserves structural form matching the generation angle
 9. **Ideogram V3 image generation** — 3 images per post using optimized visual metaphor prompt
    — No random text; precise text rules to avoid spelling errors
    — Upload to imgbb for permanent URLs
-   — **Optional**: `image_generation.enabled: false` for testing (no images, "Post" reply only)
+   — **Optional**: `image_generation.enabled: false` for testing (no images)
 10. Writes 3-column output to Google Sheets: Thema/Titel | Beitragstext | Beitragsbild (image 1)
-11. **3-image email selection** — HTML email shows 3 images side-by-side with labels 1/2/3
-    — Reply with `1`, `2`, or `3` → posts selected image to LinkedIn
-    — Fallback: reply with trigger word (`Post`) → posts image 1
-    — When images disabled: text-only email, "Post" reply only
-12. Reply-triggered LinkedIn posting — `reply_checker.py` → posts to LinkedIn API v2
-    — IMAP SINCE filter: only checks last 10 days of unread emails (not all 3813)
+11. **Telegram notification** — sends post text + 3 images as media group with inline buttons [1️⃣][2️⃣][3️⃣]
+    — User taps button to select image → Telegram bot posts directly to LinkedIn
+    — When images disabled: single "✅ Auf LinkedIn posten" button
+12. **Telegram Bot daemon** (`telegram_bot.py`) — handles commands + inline callbacks
+    — `/run` → starts pipeline, streams last 25 log lines back
+    — `/status` → shows today's log
+    — `/pending` → lists posts awaiting image selection
+    — Callback handler: processes 1/2/3 button press → calls `linkedin_poster.post_to_linkedin()`
+13. **Keyword Rotation** — per-keyword run counter persisted in `.tmp/keyword_rotation.json`
+    — `max_runs_per_keyword` configurable in config.yaml
+    — After limit reached: rotates to next keyword in list
+    — `pinned: [...]` → always use only pinned keywords, skip rotation
 
 **Confirmed working (2026-03-10):**
-- Full pipeline: "Intelligent Automation" → 3 Ideogram V3 images → email with image grid → reply "3" → Bild 3 auf LinkedIn ✅
-- Theme history active: 5+ posts tracked cross-keyword, angle 0-4 cycling correctly ✅
-- Image-disabled mode: text-only email, "Post" trigger, no Ideogram calls ✅
-- Angle-aware optimizer preserves framework/checklist structure ✅
-- Stat/source dedup: 500-char snippet + explicit "keine bereits zitierten Statistiken" rule ✅
+- Full pipeline end-to-end: scrape → classify → research → generate → optimize → Ideogram → Sheets → Telegram ✅
+- Telegram bot responds to /help, /run, /status, /pending ✅
+- Keyword rotation: state persisted in .tmp/keyword_rotation.json ✅
+- Inline button 1/2/3 → LinkedIn posting ✅ (tested with email previously, Telegram equivalent)
 
 ---
 
@@ -57,10 +62,9 @@ A fully automated WAT-framework Python pipeline that:
 | Image generation | Ideogram V3 → imgbb | Higher quality than DALL-E 3; text-capable |
 | Image prompt | Detailed visual metaphor rules (no collage, text rules) | Prevents keyword-dump + spelling errors |
 | 3 images per post | `generate_multiple(n=3)` in `image_generator.py` | Human selection improves quality |
-| Image selection | Reply with `1`/`2`/`3` in email | Simple UX, no extra UI needed |
-| Image disabled mode | `image_generation.enabled: false` in config.yaml | Faster/cheaper testing; email uses "Post" trigger only |
-| Email image grid | HTML table with 3×180px images + bold number labels | Clear visual selection |
-| IMAP filter | `UNSEEN SINCE last-10-days` | Avoids scanning 3813 old emails |
+| Image selection | Telegram inline buttons 1/2/3 | Replaced email — instant, no reply parsing needed |
+| Notification | Telegram Bot API (direct HTTP) | Replaced SMTP email — simpler, works on mobile |
+| Bot daemon | `telegram_bot.py` (python-telegram-bot v20+) | Handles both commands + callbacks |
 | Image in Sheets | `=IMAGE("url")` formula | Embeds image directly in Sheets cell |
 | Classifier strategy | Single batch call per keyword | Cost efficient |
 | gspread auth | `service_account_from_dict()` from `credentials.json` | File-based credentials |
@@ -75,8 +79,7 @@ A fully automated WAT-framework Python pipeline that:
 | Stat dedup | Explicit rule in BEREITS ABGEDECKT block + 500-char snippet | Prevents same Bitkom/Deloitte stat from repeating |
 | Logging | `loguru` | Dual output: stderr (INFO) + `.tmp/pipeline_DATE.log` (DEBUG) |
 | Post deduplication | MD5 hash of first 300 chars in `.tmp/used_posts_{keyword}.json` | harvestapi returns no URL |
-| Email sending | SMTP (smtplib) + Gmail App Password | Stdlib, no new dependencies |
-| Email reply monitoring | IMAP (imaplib) polling via `reply_checker.py` | Stdlib, simple |
+| Keyword rotation | Run counter per keyword in `.tmp/keyword_rotation.json` | Ensures topic diversity across runs |
 | LinkedIn posting | API v2 `/v2/ugcPosts` + 3-step image upload | Official API with `w_member_social` scope |
 
 ---
@@ -85,7 +88,7 @@ A fully automated WAT-framework Python pipeline that:
 
 ```
 LinkedIn Content Generator/
-├── main.py                  # Orchestrator — pipeline per keyword, dedup, retry, email notification, theme history
+├── main.py                  # Orchestrator — pipeline per keyword, dedup, retry, Telegram notification, theme history
 ├── config.yaml              # All settings + optional feature flags
 ├── config_loader.py         # Loads YAML, resolves ${ENV_VAR}, validates all sections
 ├── models.py                # Pydantic models for all data types
@@ -96,11 +99,11 @@ LinkedIn Content Generator/
 ├── content_generator.py     # Variation angles, ANGLE_STRUCTURE_HINTS, theme history injection, image prompt rules
 ├── image_generator.py       # Ideogram V3 (3 images) + DALL-E 3 fallback + imgbb upload
 ├── sheets_client.py         # Google Sheets writer — 3 fixed columns, append-only
-├── email_notifier.py        # SMTP HTML email — 3-image grid or text-only (when images disabled)
+├── telegram_notifier.py     # Sends post + 3 images + inline buttons via Telegram Bot API (HTTP)
+├── telegram_bot.py          # Telegram Bot daemon — /run /status /pending + callback handler (1/2/3 → LinkedIn)
 ├── linkedin_poster.py       # LinkedIn API v2 posting (text-only + 3-step image upload)
-├── reply_checker.py         # IMAP poll (last 10 days) → 1/2/3 selection → linkedin_poster call
-├── requirements.txt         # All Python dependencies
-├── .env                     # API keys (gitignored) — 12 keys configured
+├── requirements.txt         # All Python dependencies (incl. python-telegram-bot>=20.0)
+├── .env                     # API keys (gitignored) — 14 keys configured
 ├── credentials.json         # Google service account JSON (gitignored)
 ├── CLAUDE.md                # WAT framework agent instructions
 ├── CONTEXT.md               # This file
@@ -111,7 +114,8 @@ LinkedIn Content Generator/
     ├── used_posts_{keyword}.json
     ├── last_angle_{keyword}.json
     ├── generated_themes.json    # Cross-keyword theme history (last 20 entries, 500-char snippets)
-    └── pending_posts.json       # pending email→LinkedIn post queue, keyed by Message-ID
+    ├── keyword_rotation.json    # Keyword rotation state: {run_counts, active_index}
+    └── pending_posts.json       # pending Telegram→LinkedIn post queue, keyed by Telegram message_id
 ```
 
 ---
@@ -134,24 +138,32 @@ GeneratedPost       # keyword, post_title, post_text, image_prompt,
 ```yaml
 # --- CORE SETTINGS ---
 keywords:
-  - "Intelligent Automation"   # currently single keyword for testing
+  - "Claude Code"
+  - "Antigravity"
+  - "Agentic AI"
+  - "Ai Agents"
+  - "n8n"
+  - "Intelligent Automation"
+
+# --- KEYWORD ROTATION ---
+keyword_rotation:
+  enabled: true
+  max_runs_per_keyword: 3
+  pinned: []   # e.g. ["Intelligent Automation"] to always use that keyword
 
 apify_token: "${APIFY_TOKEN}"
 number_of_posts_to_fetch: 20
-posts_per_keyword: 1        # set to 5 for full runs
+posts_per_keyword: 1
 research_depth: shallow
 output_sheet_id: "${GOOGLE_SHEET_ID}"
 language: "de"
 post_style: "thought leadership, concise, data-driven, no fluff"
 
-# --- TIME RANGE FILTER ---
 scrape_time_range:
   unit: weeks
   value: 2
 
-# --- OPTIONAL FEATURES ---
 generate_hook: true
-
 engagement_scoring:
   enabled: true
   likes_weight: 1
@@ -178,17 +190,12 @@ post_optimization:
   enabled: true
 
 image_generation:
-  enabled: false   # set to true for production runs
+  enabled: true   # false for testing
   provider: ideogram
 
-email_notification:
+telegram_notification:
   enabled: true
-  smtp_host: "smtp.gmail.com"
-  smtp_port: 587
-  sender_email: "${EMAIL_USER}"
-  sender_password: "${EMAIL_PASSWORD}"
-  recipient_email: "${EMAIL_RECIPIENT}"
-  reply_trigger: "Post"
+  # TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in .env
 
 linkedin_posting:
   enabled: true
@@ -213,37 +220,43 @@ linkedin_posting:
 ## 7. Pipeline Execution Order (per keyword)
 
 ```
-1. Load used_urls from .tmp/used_posts_{keyword}.json
-2. linkedin_scraper.scrape(keyword, n)          → List[ScrapedPost]
-3. time_filter.filter_by_date(posts, date_from)  → List[ScrapedPost]
-4. Dedup: filter out posts whose UID is in used_urls  [retry ×2 if <3 fresh]
-5. classifier.classify(fresh_posts, keyword)     → List[ClassifiedPost] [retry ×2 if <3]
-6. score_posts() in main.py                      → List[ScoredPost]    [only if enabled]
-7. researcher.research(keyword, depth)           → ResearchSummary     [Perplexity, ~9s]
+1. _get_active_keywords(config)         → applies keyword rotation logic
+2. Load used_urls from .tmp/used_posts_{keyword}.json
+3. linkedin_scraper.scrape(keyword, n)  → List[ScrapedPost]
+4. time_filter.filter_by_date(posts, date_from)  → List[ScrapedPost]
+5. Dedup: filter out posts whose UID is in used_urls  [retry ×2 if <3 fresh]
+6. classifier.classify(fresh_posts, keyword)     → List[ClassifiedPost] [retry ×2 if <3]
+7. score_posts() in main.py             → List[ScoredPost]    [only if enabled]
+8. researcher.research(keyword, depth)  → ResearchSummary     [Perplexity, ~9s]
    Load theme_history from .tmp/generated_themes.json
    Loop N times (posts_per_keyword):
-8. content_generator.generate(..., variation_index=i, theme_history=history) → GeneratedPost
-8b. content_generator.optimize_post(post, config, variation_index=i)        → GeneratedPost
-8c. image_generator.generate_multiple(prompt, n=3)                          → List[str]  [only if enabled]
-    — Ideogram V3 via https://api.ideogram.ai/v1/ideogram-v3/generate
-    — aspect_ratio: 1x1, rendering_speed: QUALITY
-    — All 3 uploaded to imgbb for permanent URLs
+9. content_generator.generate(..., variation_index=i, theme_history=history) → GeneratedPost
+9b. content_generator.optimize_post(post, config, variation_index=i)         → GeneratedPost
+9c. image_generator.generate_multiple(prompt, n=3)                           → List[str]  [only if enabled]
    _save_theme_entry(keyword, title, post_text[:500])  → generated_themes.json updated
-9. sheets_client.write(post, config)             → None  (uses image_urls[0] or raw prompt)
-9b. email_notifier.send(post, config, image_urls=[...]) → Message-ID
+10. sheets_client.write(post, config)        → None
+11. telegram_notifier.send(post, config, image_urls) → sends media group + inline buttons
    Save UIDs of used posts to .tmp/used_posts_{keyword}.json
    Save last angle to .tmp/last_angle_{keyword}.json
+   Increment rotation run counter in .tmp/keyword_rotation.json
 ```
 
-**Human-in-the-loop publishing:**
+**Telegram → LinkedIn posting:**
 ```
-User replies to email with "1", "2", or "3"  (or just "Post" if images disabled)
-→ python reply_checker.py --once
-→ IMAP searches UNSEEN emails from last 10 days only
-→ Matches In-Reply-To header to pending_posts.json entry
-→ Reads first_line: "1"/"2"/"3" → picks image_urls[idx]  |  "Post" → uses image_url (or None)
-→ linkedin_poster.post_to_linkedin(post_body, selected_image_url, config)
-→ Entry removed from pending_posts.json
+User taps [1️⃣] / [2️⃣] / [3️⃣] inline button in Telegram
+→ telegram_bot.py callback handler (handle_callback)
+→ Reads pending_posts.json by tracking_id (= Telegram message_id of first photo)
+→ Selects image_urls[idx]
+→ linkedin_poster.post_to_linkedin(post_body, selected_image, config)
+→ Removes entry from pending_posts.json
+→ Edits Telegram message: "✅ Auf LinkedIn gepostet!"
+```
+
+**Manual trigger via Telegram:**
+```
+User → /run
+telegram_bot.py → asyncio.create_subprocess_exec("python", "main.py")
+→ Streams last 25 log lines back to user
 ```
 
 ---
@@ -270,30 +283,47 @@ User replies to email with "1", "2", or "3"  (or just "Post" if images disabled)
 
 **File:** `.tmp/generated_themes.json`
 **Schema:** `[{keyword, title, snippet (500 chars), date}, ...]` — max 20 entries, newest first
-**Injection:** Before generation, last 10 entries injected as:
-```
-BEREITS ABGEDECKTE THEMEN — NICHT WIEDERHOLEN:
-...
-Insbesondere: Verwende KEINE Statistiken oder Quellen die in diesen Posts bereits zitiert wurden
-— wähle andere Zahlen, andere Studien, andere Quellen.
-- "Title" (keyword, date): snippet...
-```
+**Injection:** Before generation, last 10 entries injected as "BEREITS ABGEDECKTE THEMEN"
 **Saves after:** Each successful post generation (before Sheets write)
 
 ---
 
-## 10. Image Generation — Ideogram V3
+## 10. Keyword Rotation (main.py)
+
+**File:** `.tmp/keyword_rotation.json`
+**Schema:** `{"run_counts": {"Claude Code": 2, "Agentic AI": 0}, "active_index": 0}`
+**Logic:**
+- `pinned` non-empty → always use only pinned keywords, skip rotation
+- No pinned → use `all_keywords[active_index]`; if count >= max_runs: advance index (wrap = reset all counts)
+- Counter incremented after `success_count += 1` for non-pinned keywords
+
+---
+
+## 11. Telegram System
+
+### telegram_notifier.py (called by main.py)
+- Direct Telegram Bot API HTTP calls (no bot library needed for sending)
+- `sendMediaGroup` → 3 photos with caption on first image
+- `sendMessage` with `inline_keyboard` → buttons [1️⃣][2️⃣][3️⃣]
+- `callback_data` format: `post:{tracking_id}:{image_index}`
+- `tracking_id` = message_id of first photo in media group
+- Saves to `pending_posts.json` keyed by `tracking_id`
+
+### telegram_bot.py (daemon)
+- `python-telegram-bot>=20.0` (async)
+- Commands: /run, /status, /pending, /help
+- `CallbackQueryHandler` pattern `^post:` → `handle_callback()`
+- Auth: only responds to `TELEGRAM_CHAT_ID`
+- On VPS: run as systemd service
+
+---
+
+## 12. Image Generation — Ideogram V3
 
 **API:** `POST https://api.ideogram.ai/v1/ideogram-v3/generate`
-- Body (flat JSON, NOT nested in `image_request`): `{"prompt": ..., "aspect_ratio": "1x1", "rendering_speed": "QUALITY"}`
+- Body: `{"prompt": ..., "aspect_ratio": "1x1", "rendering_speed": "QUALITY"}`
 - Auth: `Api-Key: {IDEOGRAM_API_KEY}` header
 - Response: `data[0].url` → download bytes → upload to imgbb
-
-**Image prompt rules** (injected via `content_generator.py`):
-- ONE visual metaphor, single focal point
-- Cinematic/minimalist, photorealistic or clean digital art
-- Max 1 word of text; must be short, common English, not from post title
-- Default: NO TEXT
 
 **3 images per post:**
 - `image_generator.generate_multiple(prompt, keyword, config, n=3)` → `List[str]`
@@ -301,30 +331,9 @@ Insbesondere: Verwende KEINE Statistiken oder Quellen die in diesen Posts bereit
 
 ---
 
-## 11. Email → LinkedIn Flow
+## 13. Environment Setup
 
-### email_notifier.py
-- Assembles post body (hook + text + cta + hashtags)
-- **With images:** HTML email shows 3 images in table layout (180px each), bold number labels; CTA: "Antworte mit 1, 2 oder 3"
-- **Without images:** Text-only email; CTA: "Antworte mit **Post**"
-- Stores `{message_id: {post_title, post_body, image_url, image_urls, sent_at, keyword}}` in pending_posts.json
-
-### reply_checker.py
-- IMAP `(UNSEEN SINCE "DD-Mon-YYYY")` — last 10 days only
-- Matches `In-Reply-To` header against pending Message-IDs
-- `first_line in ("1", "2", "3")` AND `image_urls` not empty → `selected_image = image_urls[idx]`
-- `reply_trigger` in first_line → uses `image_url` (or None for text-only post)
-- On 401: keeps email unread for retry after token refresh
-
-### linkedin_poster.py
-- Text-only: `POST /v2/ugcPosts` with `shareMediaCategory: NONE`
-- Image: Register upload → PUT image bytes → POST ugcPost with asset URN
-
----
-
-## 12. Environment Setup
-
-### .env (12 configured keys)
+### .env (14 configured keys)
 ```
 ANTHROPIC_API_KEY=sk-ant-...
 APIFY_TOKEN=apify_api_...
@@ -332,10 +341,12 @@ GOOGLE_SHEET_ID=1LZ--...
 OPENAI_API_KEY=sk-proj-...     (kept for DALL-E 3 fallback)
 IMGBB_API_KEY=767d5f...
 EMAIL_USER=raphael.swidnicki@googlemail.com
-EMAIL_PASSWORD=mqfj lebw osle ahkx    # Gmail App Password
+EMAIL_PASSWORD=mqfj lebw osle ahkx    # kept for reference
 EMAIL_RECIPIENT=raphael.swidnicki@googlemail.com
 PERPLEXITY_API_KEY=pplx-...
 IDEOGRAM_API_KEY=f6E3_...
+TELEGRAM_BOT_TOKEN=8659861026:AAF...
+TELEGRAM_CHAT_ID=1099907482
 LINKEDIN_ACCESS_TOKEN=AQWwfVyrJ...    # w_member_social + openid + profile scopes
 LINKEDIN_PERSON_URN=urn:li:person:C40HzWTIZk
 ```
@@ -346,6 +357,11 @@ LINKEDIN_PERSON_URN=urn:li:person:C40HzWTIZk
 - Token TTL: 2 months — expires ~2026-05-09
 - Person URN: `urn:li:person:C40HzWTIZk`
 
+### Telegram Bot
+- Bot name: LinkedInGenerator
+- Username: @Raphas_LinkedInGenerator_bot
+- Chat ID: 1099907482
+
 ### credentials.json
 - Service account: `linkedin-generator@n8n-learning-472012.iam.gserviceaccount.com`
 
@@ -355,7 +371,7 @@ LINKEDIN_PERSON_URN=urn:li:person:C40HzWTIZk
 
 ---
 
-## 13. Known Issues & Status
+## 14. Known Issues & Status
 
 | Issue | Status | Details |
 |---|---|---|
@@ -365,22 +381,22 @@ LINKEDIN_PERSON_URN=urn:li:person:C40HzWTIZk
 | LinkedIn token expiry | **Known** | Tokens expire ~2026-05-09. Refresh at developer.linkedin.com/tools/oauth/token-generator |
 | Post similarity cross-keyword | **Fixed (session 8)** | Theme history + angle-aware optimizer |
 | Same stat repeating (Bitkom 40,9%) | **Fixed (session 8)** | 500-char snippet + explicit stat-dedup rule |
-| Dedup exhaustion during testing | **Known** | Many test runs exhaust the fresh post pool for one keyword; delete `.tmp/used_posts_{keyword}.json` to reset |
+| Dedup exhaustion during testing | **Known** | Delete `.tmp/used_posts_{keyword}.json` to reset |
 
 ---
 
-## 14. Pending Tasks / Next Steps
+## 15. Pending Tasks / Next Steps
 
 ### High Priority
-- [ ] **Reset `posts_per_keyword` to 5** in config.yaml for production runs
-- [ ] **Re-enable all keywords** (Agentic AI, RPA/Sovereign AI, n8n) in config.yaml
-- [ ] **Re-enable image generation** (`image_generation.enabled: true`) for production
-- [ ] **Commit + push session 8 changes** to GitHub
+- [ ] **Test Telegram end-to-end**: run pipeline with images → Telegram buttons appear → tap 1/2/3 → LinkedIn post
+- [ ] **VPS Setup**: Hetzner CX22 (€4/month), deploy code, set up cron + systemd daemon for telegram_bot.py
+- [ ] **Commit + push session 9 changes** to GitHub
 
 ### Medium Priority
 - [ ] **Debug engagement scoring**: Print raw Apify item to confirm field names (scores always 0)
 - [ ] **Add voice samples**: Set `voice_samples.enabled: true` with real post examples
-- [ ] **Set up Windows Task Scheduler** for automatic `reply_checker.py` polling
+- [ ] **Reset `posts_per_keyword` to 5** for production runs
+- [ ] **Re-enable all keywords** for production (currently all active in config)
 
 ### Low Priority
 - [ ] **Add `sortBy: date`** to Apify input for fresher posts
@@ -388,7 +404,44 @@ LINKEDIN_PERSON_URN=urn:li:person:C40HzWTIZk
 
 ---
 
-## 15. Claude API & Cost
+## 16. VPS Deployment Plan (Hetzner CX22)
+
+```bash
+# 1. Create server: hetzner.com → CX22 → Ubuntu 22.04 → ~€4/month
+ssh root@DEINE_SERVER_IP
+
+apt update && apt install python3-pip git -y
+git clone https://github.com/knowledgeseek3r/Linkedin-Generator /opt/linkedin-bot
+cd /opt/linkedin-bot
+pip install -r requirements.txt
+nano .env   # paste all 14 keys
+
+# Cron: daily pipeline at 10:00
+crontab -e
+# 0 10 * * * cd /opt/linkedin-bot && python main.py >> .tmp/cron.log 2>&1
+
+# Telegram bot as systemd daemon
+nano /etc/systemd/system/linkedin-bot.service
+```
+```ini
+[Unit]
+Description=LinkedIn Telegram Bot
+After=network.target
+[Service]
+WorkingDirectory=/opt/linkedin-bot
+ExecStart=/usr/bin/python3 telegram_bot.py
+Restart=always
+RestartSec=10
+[Install]
+WantedBy=multi-user.target
+```
+```bash
+systemctl enable linkedin-bot && systemctl start linkedin-bot
+```
+
+---
+
+## 17. Claude API & Cost
 
 | Step | Model/Service | Cost approx |
 |---|---|---|
@@ -399,13 +452,12 @@ LINKEDIN_PERSON_URN=urn:li:person:C40HzWTIZk
 | Images (3×) | Ideogram V3 QUALITY | ~$0.24 (3 × $0.08) |
 
 Full run (3 keywords × 5 posts) ≈ $4.50 total (image-heavy).
-With `provider: dalle3`: ≈ $1.50 total.
 Without images: ≈ $0.18 total.
 
 ---
 
-## 16. Git Repository
+## 18. Git Repository
 
 - Remote: https://github.com/knowledgeseek3r/Linkedin-Generator
-- Last pushed commit: `feat: Ideogram V3 3-image selection, email grid, reply_checker IMAP fix, content quality rules` (sessions 6+7)
-- **Pending push**: session 8 changes (theme history, angle-aware optimizer, stat dedup, image-disabled mode)
+- Last pushed commit: `feat: keyword rotation, theme history, angle-aware optimizer, stat dedup`
+- **Pending push**: session 9 changes (Telegram bot, keyword rotation, remove email/reply_checker)

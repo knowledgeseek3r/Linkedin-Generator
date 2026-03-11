@@ -154,9 +154,13 @@ def _get_active_keywords(config: dict) -> list:
     return [active_kw]
 
 
-def run_pipeline(config: dict) -> None:
+def run_pipeline(config: dict, keyword_override: str = None) -> None:
     date_from = config["date_from"]
-    keywords = _get_active_keywords(config)
+    if keyword_override:
+        keywords = [keyword_override]
+        logger.info(f"Keyword override via CLI: '{keyword_override}'")
+    else:
+        keywords = _get_active_keywords(config)
     n_fetch = config["number_of_posts_to_fetch"]
     scoring_cfg = config.get("engagement_scoring", {})
 
@@ -248,13 +252,13 @@ def run_pipeline(config: dict) -> None:
                 # Step 7: Write to Google Sheets (uses first image = post.image_prompt)
                 sheets_client.write(post, config)
 
-                # Step 7b: Email notification (optional)
-                if config.get("email_notification", {}).get("enabled"):
+                # Step 7b: Telegram notification (optional)
+                if config.get("telegram_notification", {}).get("enabled"):
                     try:
-                        import email_notifier
-                        email_notifier.send(post, config, image_urls=image_urls)
+                        import telegram_notifier
+                        telegram_notifier.send(post, config, image_urls=image_urls)
                     except Exception as e:
-                        logger.error(f"Email notification failed for '{post.post_title}': {e}")
+                        logger.error(f"Telegram notification failed for '{post.post_title}': {e}")
                         # Non-fatal — Sheets write already succeeded, pipeline continues
 
             # Persist last used angle so next run rotates to a different angle
@@ -266,9 +270,9 @@ def run_pipeline(config: dict) -> None:
 
             success_count += 1
 
-            # Increment rotation run counter for non-pinned keywords
+            # Increment rotation run counter for non-pinned keywords (skip for CLI overrides)
             kr_cfg = config.get("keyword_rotation", {})
-            if kr_cfg.get("enabled") and not kr_cfg.get("pinned"):
+            if not keyword_override and kr_cfg.get("enabled") and not kr_cfg.get("pinned"):
                 state = _load_rotation_state()
                 state.setdefault("run_counts", {})[keyword] = \
                     state["run_counts"].get(keyword, 0) + 1
@@ -284,5 +288,9 @@ def run_pipeline(config: dict) -> None:
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--keyword", default=None, help="Override keyword rotation with this keyword")
+    args = parser.parse_args()
     config = load_config("config.yaml")
-    run_pipeline(config)
+    run_pipeline(config, keyword_override=args.keyword)
